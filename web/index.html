@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#150f16">
+  <title>PORKCHOP — Hosyond 4.0 Firmware Installer</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+  <style>
+    :root{color-scheme:dark;--bg:#120e17;--card:#201827;--line:#50354b;--pink:#ff83c5;--light:#f7e7f2;--muted:#bbaaba}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:radial-gradient(circle at 15% 0,#44213b,transparent 36%),radial-gradient(circle at 94% 5%,#302243,transparent 38%),var(--bg);color:var(--light);min-height:100vh}
+    main{max-width:920px;margin:auto;padding:clamp(18px,4vw,50px) 16px 65px}
+    .eyebrow{font-size:12px;font-weight:800;letter-spacing:.17em;text-transform:uppercase;color:var(--pink)}
+    h1{font-size:clamp(36px,6vw,68px);line-height:1.03;letter-spacing:-.05em;margin:10px 0 16px}
+    h1 span{color:var(--pink)}
+    p{line-height:1.6;color:var(--muted)}
+    .lead{font-size:clamp(16px,2vw,21px);max-width:700px}
+    .shell{display:grid;grid-template-columns:1.1fr .9fr;gap:20px;margin:35px 0}
+    .panel{background:var(--card);border:1px solid var(--line);border-radius:22px;padding:clamp(20px,3vw,32px);box-shadow:0 16px 50px #0003}
+    h2{font-size:22px;letter-spacing:-.025em;margin:0 0 12px}
+    .model{padding:12px 14px;background:#382438;border:1px solid #664159;border-radius:12px;font-weight:700;margin:22px 0}
+    .model small{display:block;font-weight:400;color:var(--muted);margin-top:5px}
+    ol{padding-left:20px;line-height:1.9;color:var(--light)}
+    esp-web-install-button{--esp-tools-button-bg-color:var(--pink);--esp-tools-button-text-color:#21131f;--esp-tools-button-border-radius:11px}
+    esp-web-install-button::part(button){font-weight:800}
+    .help{font-size:13px;margin-top:18px}
+    a{color:var(--pink);text-underline-offset:4px}
+    .dl{display:block;border:1px solid var(--line);border-radius:12px;padding:13px 14px;margin:9px 0;text-decoration:none;font-weight:650}
+    .dl:hover,.dl:focus-visible{background:#38243c;border-color:var(--pink)}
+    .dl small{display:block;font-weight:400;color:var(--muted);margin-top:5px}
+    .warn{padding:14px 18px;margin-top:18px;background:#312029;border-left:3px solid var(--pink);border-radius:8px;font-size:14px;color:var(--light);line-height:1.6}
+    footer{font-size:13px;color:var(--muted);margin-top:30px}
+    @media(max-width:680px){.shell{grid-template-columns:1fr}h1{font-size:41px}.panel{border-radius:16px}}
+    @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">CYD hardware project • Independent community port</div>
+  <h1>PORKCHOP <span>4.0</span></h1>
+  <p class="lead">Browser flashing for the Hosyond 4.0-inch ESP32 display. Real firmware binaries, correct flash addresses, and no Arduino IDE required.</p>
+  <div class="shell">
+    <section class="panel" aria-label="Install firmware">
+      <h2>Flash via USB</h2>
+      <div class="model">Hosyond 4.0" CYD
+        <small>ESP32-WROOM-32E • ST7796S • 480 × 320 landscape • XPT2046 touch</small>
+      </div>
+      <ol>
+        <li>Connect your Hosyond with a data-capable USB cable.</li>
+        <li>Open this page on Chrome or Edge on a desktop computer.</li>
+        <li>Press Install and select your ESP32 serial port.</li>
+        <li>Confirm the installation and wait for reboot.</li>
+      </ol>
+      <esp-web-install-button manifest="manifest.json">
+        <span slot="unsupported">Use desktop Chrome or Edge with Web Serial support.</span>
+        <span slot="not-allowed">Open this page using HTTPS to enable the installer.</span>
+      </esp-web-install-button>
+      <p class="help">The installer writes the bootloader, partition table, and application automatically. No need to copy them to SD.</p>
+    </section>
+    <section class="panel" aria-label="Manual firmware">
+      <h2>Download firmware</h2>
+      <a class="dl" download href="firmware/Porkchop-Hosyond-4.0-Launcher.bin">Launcher application (.bin)<small>For SD-card launchers only when their existing partition layout and app-slot size support this image.</small></a>
+      <a class="dl" download href="firmware/Porkchop-Hosyond-4.0-Full.bin">Full ESP32 image (.bin)<small>For a complete flash at 0x0 with compatible tools. This is NOT a Launcher app image.</small></a>
+      <a class="dl" href="https://github.com/mjwgeek/Porkchop-cyd-Port/tree/hosyond-cyd40">Source & build details<small>Hosyond-only branch, original 2.8-inch code preserved.</small></a>
+      <div class="warn"><b>First build — hardware validation pending.</b> This firmware is specifically for the Hosyond 4.0-inch ESP32/ST7796S board, not the original 2.8-inch ILI9341 CYD. If asked to erase flash, that may delete saved settings and captures. Back up your data first.</div>
+    </section>
+  </div>
+  <footer>Based on M5PORKCHOP by 0ct0sec and the CYD port by xom. Use Wi-Fi security features only on networks you own or have permission to assess.</footer>
+</main>
+</body>
+</html>

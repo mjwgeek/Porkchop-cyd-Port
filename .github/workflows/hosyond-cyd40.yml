@@ -1,0 +1,70 @@
+name: Build & Publish Porkchop Hosyond 4.0
+
+on:
+  push:
+    branches: [hosyond-cyd40]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+      - name: Install ESP32 core and dependencies
+        run: |
+          arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli core install esp32:esp32@3.3.7 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+          arduino-cli lib install "TFT_eSPI"
+          arduino-cli lib install "XPT2046_Touchscreen"
+          arduino-cli lib install "TinyGPSPlus"
+          python -m pip install "esptool>=4,<5"
+      - name: Configure Hosyond ST7796S
+        run: |
+          cp Hosyond_User_Setup.h ~/Arduino/libraries/TFT_eSPI/User_Setup.h
+      - name: Compile Hosyond 4.0 firmware
+        run: |
+          mkdir -p build
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32:PartitionScheme=huge_app,FlashMode=dio,FlashFreq=80,FlashSize=4M \
+            --build-property "build.extra_flags=-DHOSYOND_CYD40=1" \
+            --output-dir ./build \
+            ./PorkChop_CYD
+      - name: Assemble browser and Launcher images
+        run: |
+          set -eu
+          mkdir -p site/firmware
+          cp build/PorkChop_CYD.ino.bootloader.bin site/firmware/bootloader.bin
+          cp build/PorkChop_CYD.ino.partitions.bin site/firmware/partitions.bin
+          cp build/PorkChop_CYD.ino.bin site/firmware/firmware.bin
+          cp build/PorkChop_CYD.ino.bin site/firmware/Porkchop-Hosyond-4.0-Launcher.bin
+          python -m esptool --chip esp32 merge_bin \
+            --flash_mode dio --flash_freq 80m --flash_size 4MB \
+            -o site/firmware/Porkchop-Hosyond-4.0-Full.bin \
+            0x1000 site/firmware/bootloader.bin \
+            0x8000 site/firmware/partitions.bin \
+            0x10000 site/firmware/firmware.bin
+          cp web/index.html site/index.html
+          cp web/manifest.json site/manifest.json
+          test -s site/firmware/firmware.bin
+          test -s site/firmware/Porkchop-Hosyond-4.0-Full.bin
+      - name: Upload firmware images
+        uses: actions/upload-artifact@v4
+        with:
+          name: Porkchop-Hosyond-4.0-Firmware
+          path: site/firmware/*.bin
+          if-no-files-found: error
+      - name: Publish the website to gh-pages
+        if: github.ref == 'refs/heads/hosyond-cyd40'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./site
+          publish_branch: gh-pages
+          force_orphan: true

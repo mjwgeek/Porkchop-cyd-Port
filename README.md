@@ -1,3 +1,13 @@
+# Hosyond 4.0" web flasher and firmware
+
+**[Install the Hosyond 4.0" firmware in Chrome / Edge](https://mjwgeek.github.io/Porkchop-cyd-Port/)** — [download binaries from GitHub Actions](https://github.com/mjwgeek/Porkchop-cyd-Port/actions/workflows/hosyond-cyd40.yml) — [hardware notes](HOSYOND_CYD40.md).
+
+This page describes the original 2.8" CYD port below. The 4.0" ST7796S build is
+on the dedicated `hosyond-cyd40` branch, with a compiled firmware image,
+SD Launcher app-image download, and three-part web flasher.
+
+---
+
 ```
  ██▓███   ▒█████   ██▀███   ██ ▄█▀ ▄████▄   ██░ ██  ▒█████   ██▓███  
 ▓██░  ██▒▒██▒  ██▒▓██ ▒ ██▒ ██▄█▒ ▒██▀ ▀█  ▓██░ ██▒▒██▒  ██▒▓██░  ██▒

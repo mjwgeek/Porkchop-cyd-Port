@@ -38,6 +38,9 @@
 #include <time.h>
 #include <string.h>
 #include <Arduino.h>
+#ifdef HOSYOND_CYD40
+#include <esp_system.h>
+#endif
 #include <mbedtls/base64.h>
 #include <mbedtls/md.h>
 #include <mbedtls/pkcs5.h>
@@ -48,7 +51,13 @@
 // PIGGY BLUES uses stub on CYD — BLE stack incompatible with sprite memory budget
 
 // Optional GPS
+#ifdef HOSYOND_CYD40
+// Preserve USB Serial for diagnostics on the 4.0-inch board; optional
+// external GPS is not automatically connected to the standard Hosyond.
+#define GPS_ENABLED false
+#else
 #define GPS_ENABLED true
+#endif
 #if GPS_ENABLED
   #include <TinyGPS++.h>
 #endif
@@ -56,8 +65,14 @@
 // ============================================================
 // CYD PIN DEFINITIONS
 // ============================================================
+#ifdef HOSYOND_CYD40
+#define TFT_BL_PIN    27   // Hosyond ST7796S backlight
+#define LED_R_PIN     22   // GPIO4 is audio amplifier enable, not RGB
+#define AUDIO_AMP_PIN  4   // Active LOW amplifier
+#else
 #define TFT_BL_PIN    21   // Backlight (active HIGH)
 #define LED_R_PIN     4    // RGB LED Red (active LOW)
+#endif
 #define LED_G_PIN     16   // RGB LED Green (active LOW)
 #define LED_B_PIN     17   // RGB LED Blue (active LOW)
 #define SD_CS_PIN     5
@@ -66,9 +81,16 @@
 // Touch (VSPI)
 #define TOUCH_CS_PIN  33
 #define TOUCH_IRQ_PIN 36
+#ifdef HOSYOND_CYD40
+// LCD and XPT2046 share the 14/12/13 SPI pins.
+#define TOUCH_CLK_PIN 14
+#define TOUCH_MISO_PIN 12
+#define TOUCH_MOSI_PIN 13
+#else
 #define TOUCH_CLK_PIN 25
 #define TOUCH_MISO_PIN 39
 #define TOUCH_MOSI_PIN 32
+#endif
 
 // GPS (Serial2) - optional
 // NM-RF-HAT routes the GNSS module's NMEA output onto GPIO 1.
@@ -83,8 +105,13 @@
 // CYD: we scale proportionally to 320×240:
 //   TOP_BAR=20, BOTTOM_BAR=20, MAIN=200
 // ============================================================
+#ifdef HOSYOND_CYD40
+#define DISPLAY_W     480
+#define DISPLAY_H     320
+#else
 #define DISPLAY_W     320
 #define DISPLAY_H     240
+#endif
 #define TOP_BAR_H     20
 #define BOTTOM_BAR_H  20
 #define MAIN_H        (DISPLAY_H - TOP_BAR_H - BOTTOM_BAR_H)
@@ -252,12 +279,15 @@ TFT_eSprite mainSprite = TFT_eSprite(&tft); // Main content area sprite
 
 // Touch on custom VSPI pins (CLK=25, MISO=39, MOSI=32, CS=33)
 SPIClass touchSPI(VSPI);
-// SD also uses VSPI but on different pins (18/19/23/5)
-// We must reclaim the VSPI bus before each SD operation since touchSPI shares it
+#ifdef HOSYOND_CYD40
+// The Hosyond touch shares the LCD SPI wiring; SD has its own HSPI host.
+SPIClass sdSPI(HSPI);
+#define SD_RECLAIM() do { /* independent SD SPI host, no re-pin needed */ } while(0)
+#else
+// Original 2.8-inch CYD shares the peripheral between touch and SD.
 SPIClass sdSPI(VSPI);
-// SD bus reclaim — restores VSPI pins and re-registers SD after touchSPI reconfigures VSPI
-// Call before any SD operation that happens after touch init
 #define SD_RECLAIM() do { sdSPI.begin(18, 19, 23, SD_CS_PIN); SD.begin(SD_CS_PIN, sdSPI, 20000000); } while(0)
+#endif
 XPT2046_Touchscreen touch(TOUCH_CS_PIN, TOUCH_IRQ_PIN);
 
 // SD uses the default Arduino SPI object (VSPI default pins: CLK=18, MISO=19, MOSI=23, CS=5)
@@ -301,6 +331,104 @@ struct Config {
   uint8_t ghostInterval = 5;   // minutes between MAC rotations (1-60)
   uint8_t screenRotation = 3;  // TFT_eSPI rotation value — 1 or 3 (180deg apart, both landscape)
 } cfg;
+
+
+#ifdef HOSYOND_CYD40
+// Theme helpers are defined below, after the configuration struct.
+inline uint16_t colorFG();
+inline uint16_t colorBG();
+// Full-width on-screen credential keyboard. Saves to the same NVS fields
+// previously accessible only by serial commands, with secrets masked.
+namespace TouchKeyboard {
+enum Field : uint8_t { None=0, WigleUser, WigleToken, WpasecKey };
+static Field selected = None;
+static char value[48]={0};
+static bool shifted=false, symbols=false;
+bool isOpen() { return selected!=None; }
+void open(Field f) {
+  selected=f; shifted=false; symbols=false;
+  const char *src = f==WigleUser ? cfg.wigleApiName :
+                    f==WigleToken ? cfg.wigleApiToken : cfg.wpasecKey;
+  strncpy(value,src,sizeof(value)-1); value[sizeof(value)-1]=0;
+}
+template <typename G> void render(G& dst,int yOff) {
+  dst.setTextColor(colorFG(),colorBG()); dst.setTextSize(1);
+  dst.setTextDatum(TL_DATUM);
+  const char* title=selected==WigleUser?"WiGLE username":
+      selected==WigleToken?"WiGLE API token":"WPA-SEC API key";
+  dst.drawString(title,10,yOff+8);
+  dst.drawRect(8,yOff+26,DISPLAY_W-16,28,colorFG());
+  char visible[48]={0};
+  size_t n=strlen(value);
+  if(selected==WigleUser) strncpy(visible,value,sizeof(visible)-1);
+  else {
+    size_t shown=n<44?n:44;
+    for(size_t i=0;i<shown;i++)visible[i]='*';
+  }
+  dst.drawString(visible,14,yOff+33);
+  const char* letters[4]={"1234567890","qwertyuiop","asdfghjkl.","zxcvbnm-_@"};
+  const char* extras[4] ={"1234567890","-_=+/:;@.!","[]{}()#$%^","*&$#%!?<>."};
+  const char* const* rows=symbols?extras:letters;
+  int keyW=(DISPLAY_W-16)/10;
+  dst.setTextDatum(MC_DATUM);
+  for(int row=0;row<4;row++){
+    for(int col=0;col<10;col++){
+      int x=8+col*keyW, y=yOff+60+row*37;
+      dst.drawRoundRect(x,y,keyW-3,32,4,colorFG());
+      char str[2]={rows[row][col],0};
+      if (!str[0]) continue;
+      if(shifted && str[0]>='a'&&str[0]<='z') str[0]-=32;
+      dst.drawString(str,x+(keyW-3)/2,y+16);
+    }
+  }
+  const char* labels[6]={"SHIFT","SYMS","SPACE","DELETE","SAVE","CANCEL"};
+  int actionW=(DISPLAY_W-16)/6;
+  for(int col=0;col<6;col++){
+    int x=8+col*actionW, y=yOff+218;
+    dst.drawRoundRect(x,y,actionW-3,38,4,colorFG());
+    dst.drawString(labels[col],x+(actionW-3)/2,y+19);
+  }
+  dst.setTextDatum(TL_DATUM);
+}
+void handle(bool tap,bool hold,int tx,int ty) {
+  if(hold) { selected=None; return; }
+  if(!tap || !isOpen())return;
+  int relY=ty-TOP_BAR_H;
+  size_t n=strlen(value);
+  if(relY>=60 && relY<60+4*37) {
+    int row=(relY-60)/37, col=(tx-8)/((DISPLAY_W-16)/10);
+    if(tx<8 || col<0 || col>9)return;
+    const char* letters[4]={"1234567890","qwertyuiop","asdfghjkl.","zxcvbnm-_@"};
+    const char* extras[4] ={"1234567890","-_=+/:;@.!","[]{}()#$%^","*&$#%!?<>."};
+    char c=(symbols?extras:letters)[row][col];
+    if(c && n<sizeof(value)-1) {
+      if(shifted && c>='a'&&c<='z') c-=32;
+      value[n]=c; value[n+1]=0;
+    }
+  } else if(relY>=218 && relY<257) {
+    int col=(tx-8)/((DISPLAY_W-16)/6);
+    if(tx<8 || col<0 || col>5)return;
+    if(col==0) shifted=!shifted;
+    if(col==1) symbols=!symbols;
+    if(col==2 && n<sizeof(value)-1) { value[n]=' '; value[n+1]=0; }
+    if(col==3 && n) value[n-1]=0;
+    if(col==4) {
+      char* dest= selected==WigleUser ? cfg.wigleApiName :
+                  selected==WigleToken ? cfg.wigleApiToken : cfg.wpasecKey;
+      const char* key=selected==WigleUser?"wgl_name":
+                      selected==WigleToken?"wgl_token":"wpasec";
+      strcpy(dest,value);
+      prefs.begin("pork",false);
+      prefs.putString(key,value);
+      prefs.end();
+      memset(value,0,sizeof(value));
+      selected=None;
+    }
+    if(col==5) { memset(value,0,sizeof(value)); selected=None; }
+  }
+}
+}
+#endif
 
 void rotateScreen(); // forward decl — defined near loadConfig(), called earlier from handleInput()
 
@@ -858,7 +986,16 @@ static bool _ledcInited = false;
 
 static void _tone(uint16_t freq) {
   if (!cfg.soundEnabled || !_ledcInited) return;
-  if (freq == 0) { ledcWrite(SPEAKER_PIN, 0); return; }
+  if (freq == 0) {
+    ledcWrite(SPEAKER_PIN, 0);
+#ifdef HOSYOND_CYD40
+    digitalWrite(AUDIO_AMP_PIN, HIGH);
+#endif
+    return;
+  }
+#ifdef HOSYOND_CYD40
+  digitalWrite(AUDIO_AMP_PIN, LOW);
+#endif
   ledcChangeFrequency(SPEAKER_PIN, freq, 10);
   // 50% duty (512/1023) = true square wave = maximum symmetric swing through AC coupling cap
   // soundVolume 0-255 maps to 256-512 (never below 25% to maintain oscillation)
@@ -868,6 +1005,9 @@ static void _tone(uint16_t freq) {
 }
 static void _noTone() {
   if (_ledcInited) ledcWrite(SPEAKER_PIN, 0);
+#ifdef HOSYOND_CYD40
+  digitalWrite(AUDIO_AMP_PIN, HIGH);
+#endif
 }
 
 static void _startSeq(const Note* seq) {
@@ -877,6 +1017,10 @@ static void _startSeq(const Note* seq) {
 }
 
 void init() {
+#ifdef HOSYOND_CYD40
+  digitalWrite(AUDIO_AMP_PIN, HIGH);
+  pinMode(AUDIO_AMP_PIN, OUTPUT);
+#endif
   // 10-bit resolution gives 0-1023 range — more precise duty control
   // NS4168 amp: IN+ is AC-coupled, 50% duty = max symmetric swing
   if (ledcAttach(SPEAKER_PIN, 1000, 10)) {
@@ -3342,7 +3486,13 @@ void init() {
   // the pig UI. If you ever want richer gradients back, change 8 -> 16 (and
   // accept the WARHOG crash risk returns unless memory is freed elsewhere).
   mainSprite.setColorDepth(8);
+#ifdef HOSYOND_CYD40
+  // 480x160 sprite requires ~77 KB contiguous RAM. Prefer direct drawing
+  // over starving the Wi-Fi engine; do not allocate on the 4-inch board.
+  if (false) {
+#else
   if (mainSprite.createSprite(DISPLAY_W, 160)) {
+#endif
     Serial.println("[DISPLAY] Sprite 320x160 8bpp OK");
   } else {
     Serial.println("[DISPLAY] Sprite alloc failed — direct draw mode");
@@ -4189,6 +4339,33 @@ void update() {
     // ── SETTINGS ─────────────────────────────────────────────────────────────
     case PorkchopMode::SETTINGS: {
       auto drawSet = [&](auto& dst, int yOff) {
+#ifdef HOSYOND_CYD40
+        if (TouchKeyboard::isOpen()) { TouchKeyboard::render(dst, yOff); return; }
+        dst.setTextColor(colorFG(), colorBG());
+        dst.setTextSize(1);
+        dst.setTextDatum(TL_DATUM);
+        dst.drawString("PORKCHOP 4.0 | SETTINGS", 8, yOff+8);
+        dst.drawLine(8, yOff+28, DISPLAY_W-16, yOff+28, colorFG());
+        char row[80];
+        snprintf(row,sizeof(row),"THEME: %s  [tap upper left]", THEMES[cfg.themeIndex].name);
+        dst.drawString(row, 10, yOff+36);
+        snprintf(row,sizeof(row),"SOUND: %s  [tap upper right]", cfg.soundEnabled?"ON":"OFF");
+        dst.drawString(row, DISPLAY_W/2+10, yOff+36);
+        dst.drawRoundRect(8, yOff+57, DISPLAY_W-16, 29, 4, colorFG());
+        dst.drawString("EDIT WIGLE USERNAME", 18, yOff+64);
+        dst.drawString(cfg.wigleApiName[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+64);
+        dst.drawRoundRect(8, yOff+92, DISPLAY_W-16, 29, 4, colorFG());
+        dst.drawString("EDIT WIGLE TOKEN", 18, yOff+99);
+        dst.drawString(cfg.wigleApiToken[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+99);
+        dst.drawRoundRect(8, yOff+127, DISPLAY_W-16, 29, 4, colorFG());
+        dst.drawString("EDIT WPA-SEC KEY", 18, yOff+134);
+        dst.drawString(cfg.wpasecKey[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+134);
+        snprintf(row,sizeof(row),"GHOST MODE: %s [tap below]", cfg.ghostMode?"ON":"OFF");
+        dst.drawString(row, 10, yOff+174);
+        dst.drawString("BATTERY ADC: see Diagnostics (GPIO34)", 10, yOff+200);
+        dst.drawString("HOLD TO SAVE + EXIT  |  TOP LEFT: CANCEL", 10, yOff+MAIN_H-20);
+        return;
+#endif
         CircuitPulse::draw(dst, yOff);
         dst.setTextColor(colorFG(), colorBG());
         dst.setTextSize(1);
@@ -5085,6 +5262,14 @@ void update() {
           snprintf(b,sizeof(b),"KNUTH:%.2f%s", kr, kr>0.7f?"!":"");
           dst.drawString(b,rx,y);
         }
+#ifdef HOSYOND_CYD40
+        y += dy;
+        snprintf(b,sizeof(b),"LAST RESET: %d (ESP32 reason)", (int)esp_reset_reason());
+        dst.setTextDatum(TL_DATUM);
+        dst.drawString(b,lx,y); y += dy;
+        snprintf(b,sizeof(b),"BAT ADC: %umV (GPIO34, not pack voltage)",(unsigned)analogReadMilliVolts(34));
+        dst.drawString(b,lx,y);
+#endif
         dst.setTextDatum(TC_DATUM);
         if (WebUI::isActive()) {
           dst.drawString("192.168.4.1  HOLD:back", DISPLAY_W/2, yOff+MAIN_H-20);
@@ -10256,7 +10441,34 @@ void handleInput() {
       break;
 
     case PorkchopMode::SETTINGS:
+#ifdef HOSYOND_CYD40
+      if (TouchKeyboard::isOpen()) {
+        TouchKeyboard::handle(isTap,isHold,tx,ty);
+        break;
+      }
+      if (isTap) {
+        // The 4.0-inch screen provides independently tappable API fields.
+        int ry = ty-TOP_BAR_H;
+        if (ry>=57 && ry<86) { TouchKeyboard::open(TouchKeyboard::WigleUser); break; }
+        if (ry>=92 && ry<121) { TouchKeyboard::open(TouchKeyboard::WigleToken); break; }
+        if (ry>=127 && ry<156) { TouchKeyboard::open(TouchKeyboard::WpasecKey); break; }
+        if (ry>=166 && ry<207) {
+          cfg.ghostMode=!cfg.ghostMode;
+          GhostMode::apply();
+          Display::showToast(cfg.ghostMode?"GHOST ON":"GHOST OFF",1500);
+          break;
+        }
+        if (ry>=30 && ry<55) {
+          if (tx<DISPLAY_W/2) cfg.themeIndex=(cfg.themeIndex+1)%THEME_COUNT;
+          else cfg.soundEnabled=!cfg.soundEnabled;
+          break;
+        }
+        if (tx<65 && ty<TOP_BAR_H+28) { currentMode=PorkchopMode::IDLE; break; }
+      }
+      if (!isHold) break;
+#endif
       if(isTap){
+#ifndef HOSYOND_CYD40
         if (tx < 60 && ty < TOP_BAR_H + 40) {
           // Corner tap: leave WITHOUT saving — a genuine "cancel" that
           // wasn't possible before (HOLD always commits changes).
@@ -10292,6 +10504,7 @@ void handleInput() {
             strncpy(gmsg,"GHOST OFF",sizeof(gmsg));
           Display::showToast(gmsg, 2000);
         }
+#endif
       } else if(isHold){
         prefs.begin("pork",false);
         prefs.putUChar("theme",cfg.themeIndex);
@@ -12592,6 +12805,10 @@ void setup() {
   pinMode(LED_G_PIN,OUTPUT); digitalWrite(LED_G_PIN,HIGH);
   pinMode(LED_B_PIN,OUTPUT); digitalWrite(LED_B_PIN,HIGH);
 
+#ifdef HOSYOND_CYD40
+  analogReadResolution(12);
+  analogSetPinAttenuation(34, ADC_11db);
+#endif
   // Backlight on
   pinMode(TFT_BL_PIN,OUTPUT); digitalWrite(TFT_BL_PIN,HIGH);
 
