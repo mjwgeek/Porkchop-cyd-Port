@@ -3776,6 +3776,15 @@ void drawTopBar() {
   tft.drawString(left, 2, 6);
   tft.setTextDatum(TR_DATUM);
   tft.drawString(right, DISPLAY_W - 2, 6);
+#ifdef HOSYOND_CYD40
+  // The TFT's font has no reliable lightning glyph: draw the tiny amber
+  // bolt beside the battery part of the right-hand status cluster.
+  if (battery.present && battery.chargingEstimated) {
+    const int16_t iconX = DISPLAY_W - 8 - rightW;
+    tft.fillTriangle(iconX+4,3, iconX,11, iconX+4,11,TFT_YELLOW);
+    tft.fillTriangle(iconX+3,9, iconX+8,9, iconX+1,19,TFT_YELLOW);
+  }
+#endif
 
   // Thin XP progress strip along the very bottom edge — always visible,
   // no need to open Swine Stats just to see how close the next level is.
@@ -5289,6 +5298,10 @@ void update() {
         dst.drawString(b,lx,y);
         y += dy;
         snprintf(b,sizeof(b),"BAT SENSE: %u mV raw GPIO34",(unsigned)analogReadMilliVolts(34));
+        dst.drawString(b,lx,y);
+        y += dy;
+        snprintf(b,sizeof(b),"CHARGING: %s (voltage-trend estimate)",
+                 HosyondBattery::sample().chargingEstimated?"LIKELY":"not inferred");
         dst.drawString(b,lx,y);
 #endif
         dst.setTextDatum(TC_DATUM);
