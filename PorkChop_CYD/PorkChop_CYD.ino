@@ -280,8 +280,11 @@ const uint8_t CHICKEN_DOWN[] PROGMEM = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
 TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite mainSprite = TFT_eSprite(&tft); // Main content area sprite
 
-// Touch on custom VSPI pins (CLK=25, MISO=39, MOSI=32, CS=33)
+// The old 2.8-inch CYD has a dedicated touch bus. On the Hosyond
+// XPT2046 shares the TFT SPI host and is read through TFT_eSPI instead.
+#ifndef HOSYOND_CYD40
 SPIClass touchSPI(VSPI);
+#endif
 #ifdef HOSYOND_CYD40
 // The Hosyond touch shares the LCD SPI wiring; SD has its own HSPI host.
 SPIClass sdSPI(HSPI);
@@ -991,25 +994,31 @@ static void _tone(uint16_t freq) {
   if (!cfg.soundEnabled || !_ledcInited) return;
   if (freq == 0) {
     ledcWrite(SPEAKER_PIN, 0);
-#ifdef HOSYOND_CYD40
-    digitalWrite(AUDIO_AMP_PIN, HIGH);
-#endif
     return;
   }
-#ifdef HOSYOND_CYD40
-  digitalWrite(AUDIO_AMP_PIN, LOW);
-#endif
   ledcChangeFrequency(SPEAKER_PIN, freq, 10);
-  // 50% duty (512/1023) = true square wave = maximum symmetric swing through AC coupling cap
-  // soundVolume 0-255 maps to 256-512 (never below 25% to maintain oscillation)
-  uint16_t duty = 256 + (uint16_t)(cfg.soundVolume * 256UL / 255);
-  if (duty > 512) duty = 512;  // never above 50% — above 50% reduces output
+#ifdef HOSYOND_CYD40
+  // The amplified 4-inch board was driving a 25-50% square wave into the
+  // NS4168: painfully loud, and each amp power-on caused display flashes.
+  // Reduce PWM energy substantially and preload the waveform BEFORE
+  // enabling GPIO4, avoiding an amp-startup pop on every individual note.
+  const uint16_t duty = cfg.soundVolume
+       ? (uint16_t)(4 + (uint32_t)cfg.soundVolume * 32 / 255)
+       : 0;
   ledcWrite(SPEAKER_PIN, duty);
+  if (duty) digitalWrite(AUDIO_AMP_PIN, LOW);
+#else
+  uint16_t duty = 256 + (uint16_t)(cfg.soundVolume * 256UL / 255);
+  if (duty > 512) duty = 512;
+  ledcWrite(SPEAKER_PIN, duty);
+#endif
 }
 static void _noTone() {
   if (_ledcInited) ledcWrite(SPEAKER_PIN, 0);
 #ifdef HOSYOND_CYD40
-  digitalWrite(AUDIO_AMP_PIN, HIGH);
+  // Leave the amp enabled only for the current whole sequence, not on/off
+  // for each tiny note. Gate it when idle or when sound has been disabled.
+  if (_seq == nullptr || !cfg.soundEnabled) digitalWrite(AUDIO_AMP_PIN, HIGH);
 #endif
 }
 
@@ -1094,7 +1103,7 @@ void update() {
   if (_seq==nullptr) return;
   uint32_t now=millis();
   const Note& n=_seq[_step];
-  if (n.duration==0) { _noTone(); _seq=nullptr; return; }
+  if (n.duration==0) { _seq=nullptr; _noTone(); return; }
 
   if (_inNote) {
     if (now-_stepMs >= n.duration) {
@@ -1116,7 +1125,7 @@ void update() {
 
 bool isPlaying()    { return _seq!=nullptr || _qT!=_qH; }
 bool isLedcInited() { return _ledcInited; }
-void stop()         { _noTone(); _seq=nullptr; _qH=_qT=0; }
+void stop()         { _seq=nullptr; _qH=_qT=0; _noTone(); }
 
 } // namespace SFX
 
@@ -5816,11 +5825,25 @@ int lastTX = 0, lastTY = 0;
 #define T_YMAX 3750
 
 bool getPoint(int& sx, int& sy) {
+#ifdef HOSYOND_CYD40
+  // TFT_eSPI owns both ST7796S and XPT2046. A second touchSPI(VSPI)
+  // initialization used to repin the panel bus, leaving touch dead.
+  // Read pressure before raw XY: getTouchRaw() alone has no down gate.
+  if (tft.getTouchRawZ() < 350) return false;
+  uint16_t rawX=0,rawY=0;
+  tft.getTouchRaw(&rawX,&rawY);
+  // Map to native 320x480 portrait frame, then rotate to match the
+  // currently configured 480x320 landscape display (1 or 3).
+  const int nx=constrain(map(rawX,T_XMIN,T_XMAX,0,DISPLAY_H-1),0,DISPLAY_H-1);
+  const int ny=constrain(map(rawY,T_YMIN,T_YMAX,0,DISPLAY_W-1),0,DISPLAY_W-1);
+  if(cfg.screenRotation==3) { sx=DISPLAY_W-1-ny; sy=nx; }
+  else { sx=ny; sy=DISPLAY_H-1-nx; }
+#else
   if (!touch.tirqTouched() && !touch.touched()) return false;
   TS_Point p = touch.getPoint();
-  // Map to screen (landscape, rotation=1)
   sx = map(p.x, T_XMIN, T_XMAX, 0, DISPLAY_W);
   sy = map(p.y, T_YMIN, T_YMAX, 0, DISPLAY_H);
+#endif
   sx = constrain(sx, 0, DISPLAY_W-1);
   sy = constrain(sy, 0, DISPLAY_H-1);
   return true;
@@ -10804,8 +10827,22 @@ void loadConfig() {
   prefs.getString("wgl_name",cfg.wigleApiName,sizeof(cfg.wigleApiName));
   prefs.getString("wgl_token",cfg.wigleApiToken,sizeof(cfg.wigleApiToken));
   prefs.getString("wpasec",cfg.wpasecKey,sizeof(cfg.wpasecKey));
+#ifdef HOSYOND_CYD40
+  cfg.soundEnabled  = prefs.getBool("sound",false);
+  cfg.soundVolume   = prefs.getUChar("vol", 24);
+  // ONE-TIME quiet migration: older preview saved sound=true and volume
+  // 255. Silence them on upgrade, then preserve the user's later choice.
+  if (!prefs.getBool("quiet40v2",false)) {
+    cfg.soundEnabled = false;
+    cfg.soundVolume = 24;
+    prefs.putBool("sound",false);
+    prefs.putUChar("vol",24);
+    prefs.putBool("quiet40v2",true);
+  }
+#else
   cfg.soundEnabled  = prefs.getBool("sound",true);
-  cfg.soundVolume   = prefs.getUChar("vol", 255);
+  cfg.soundVolume   = prefs.getUChar("vol",255);
+#endif
   cfg.ghostMode     = prefs.getBool("ghost", false);
   cfg.ghostInterval = prefs.getUChar("ghost_int", 5);
   cfg.screenRotation = prefs.getUChar("rotation", 3);
@@ -10824,7 +10861,12 @@ void loadConfig() {
 void rotateScreen() {
   cfg.screenRotation = (cfg.screenRotation == 3) ? 1 : 3;
   tft.setRotation(cfg.screenRotation);
+#ifdef HOSYOND_CYD40
+  // Explicit inversion baseline must be reapplied after panel rotation.
+  tft.invertDisplay(false);
+#else
   touch.setRotation(cfg.screenRotation);
+#endif
   prefs.begin("pork", false);
   prefs.putUChar("rotation", cfg.screenRotation);
   prefs.end();
@@ -12847,7 +12889,13 @@ void setup() {
   pinMode(TFT_BL_PIN,OUTPUT); digitalWrite(TFT_BL_PIN,HIGH);
 
   // TFT
-  tft.begin(); tft.setRotation(3); tft.fillScreen(TFT_BLACK);  // rotation 3 = 180deg flip from stock port (NM-RF-HAT mounting)
+  tft.begin(); tft.setRotation(3);
+#ifdef HOSYOND_CYD40
+  // Hardware report: inversion ON gave white background with pink writing.
+  // Explicit runtime OFF wins over TFT_INVERSION_ON in the setup header.
+  tft.invertDisplay(false);
+#endif
+  tft.fillScreen(TFT_BLACK);
 
   // SD init — use dedicated sdSPI instance on pins 18/19/23
   // Must be initialized BEFORE touchSPI.begin() which reconfigures the shared VSPI peripheral
@@ -12891,13 +12939,24 @@ void setup() {
 
   loadConfig();
   tft.setRotation(cfg.screenRotation); // apply saved rotation now that config is loaded
+#ifdef HOSYOND_CYD40
+  tft.invertDisplay(false);
+#endif
 
   // Sprite — after WiFi
   Display::init();
   tft.fillScreen(colorBG());
   Display::showBootSplash();
+#ifdef HOSYOND_CYD40
+  // No second SPI master on pins 14/12/13. TFT_eSPI initializes
+  // TOUCH_CS=33 and its getTouchRawZ()/getTouchRaw() share LCD SPI safely.
+  pinMode(TOUCH_CS_PIN,OUTPUT);
+  digitalWrite(TOUCH_CS_PIN,HIGH);
+  Serial.println("[CYD40] XPT2046: TFT_eSPI shared-bus touch enabled");
+#else
   touchSPI.begin(TOUCH_CLK_PIN,TOUCH_MISO_PIN,TOUCH_MOSI_PIN,TOUCH_CS_PIN);
-  touch.begin(touchSPI); touch.setRotation(cfg.screenRotation);  // match display rotation so touch zones aren't mirrored
+  touch.begin(touchSPI); touch.setRotation(cfg.screenRotation);
+#endif
 
   // Init subsystems
   SFX::init();
