@@ -77,3 +77,15 @@ and gates the NS4168 amplifier once per sound sequence instead of pulsing
 its enable pin for every short beep. These changes aim to reduce screen
 flashes caused by amp startup and current draw. They do not prove that an
 underpowered USB supply or hardware power-rail sag cannot still cause flashes.
+
+## Follow-up: black-screen recovery
+
+**Important regression:** The explicit `invertDisplay(false)` commands
+introduced a completely black screen with no readable text on the physical
+Hosyond. The next build removes those three runtime commands and restores
+the same driver-managed `TFT_INVERSION_ON` startup polarity used by the
+last known *visible* Porkchop build. Touch-bus sharing and default muted
+speaker remain in place. A separate validated color palette change is needed
+before claiming dark-theme colors are correct; controller polarity must not
+be changed blindly. The previous preview can be restored through the full
+USB flasher or an SD launcher with a compatible partition layout.

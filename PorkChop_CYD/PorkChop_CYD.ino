@@ -10861,12 +10861,11 @@ void loadConfig() {
 void rotateScreen() {
   cfg.screenRotation = (cfg.screenRotation == 3) ? 1 : 3;
   tft.setRotation(cfg.screenRotation);
-#ifdef HOSYOND_CYD40
-  // Explicit inversion baseline must be reapplied after panel rotation.
-  tft.invertDisplay(false);
-#else
+#ifndef HOSYOND_CYD40
   touch.setRotation(cfg.screenRotation);
 #endif
+  // Do not change ST7796S inversion on Hosyond rotation. The TFT driver's
+  // initialized panel polarity has already produced a visible display.
   prefs.begin("pork", false);
   prefs.putUChar("rotation", cfg.screenRotation);
   prefs.end();
@@ -12889,12 +12888,10 @@ void setup() {
   pinMode(TFT_BL_PIN,OUTPUT); digitalWrite(TFT_BL_PIN,HIGH);
 
   // TFT
+  // On Hosyond use TFT_INVERSION_ON's controller initialization exactly
+  // as the previous display-visible firmware did. Sending DCS 0x20 with
+  // invertDisplay(false) made this panel go black and stopped text appearing.
   tft.begin(); tft.setRotation(3);
-#ifdef HOSYOND_CYD40
-  // Hardware report: inversion ON gave white background with pink writing.
-  // Explicit runtime OFF wins over TFT_INVERSION_ON in the setup header.
-  tft.invertDisplay(false);
-#endif
   tft.fillScreen(TFT_BLACK);
 
   // SD init — use dedicated sdSPI instance on pins 18/19/23
@@ -12939,9 +12936,7 @@ void setup() {
 
   loadConfig();
   tft.setRotation(cfg.screenRotation); // apply saved rotation now that config is loaded
-#ifdef HOSYOND_CYD40
-  tft.invertDisplay(false);
-#endif
+  // No runtime inversion override. Preserve the previous readable panel init.
 
   // Sprite — after WiFi
   Display::init();
