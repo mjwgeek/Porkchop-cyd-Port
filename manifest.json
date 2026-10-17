@@ -1,0 +1,23 @@
+{
+  "name": "Porkchop CYD — Hosyond 4.0 ST7796S",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32",
+      "parts": [
+        {
+          "path": "flash/bootloader.bin",
+          "offset": 4096
+        },
+        {
+          "path": "flash/partitions.bin",
+          "offset": 32768
+        },
+        {
+          "path": "flash/firmware.bin",
+          "offset": 65536
+        }
+      ]
+    }
+  ]
+}
