@@ -58,34 +58,24 @@ The lava lamp's charging animation is based on the same voltage-trend
 heuristic as SquachWatch; it is not a confirmed charger-status indication.
 SD formatting is intentionally not exposed as a one-tap destructive action.
 
-## October 17 screen, touch and audio corrections
+## Display startup recovery: diagnostic release
 
-Hosyond's XPT2046 shares the LCD SPI bus. The firmware now reads raw touch
-pressure/coordinates through TFT_eSPI, without starting a second SPI peripheral
-on the same pins. Raw readings are mapped through the native portrait frame
-and the current rotation (1 or 3). Touch calibration/orientation require
-verification on real hardware.
+This firmware intentionally restores the exact board TFT configuration and
+original (pre-shared-bus-touch) app implementation from known visibly working
+commit `656048a`. The later shared-bus touchscreen implementation and
+inversion changes have temporarily been backed out to isolate the solid
+black/white-screen regression. It is NOT yet a touchscreen fix.
 
-The firmware calls `invertDisplay(false)` at the panel's runtime setup and
-after rotation: on the tested screen `invertDisplay(true)` produced white
-backgrounds with pink text rather than the expected dark UI.
+A visible startup checkpoint draws **three red/green/blue stripes** and
+`PORKCHOP LCD CHECK` before SD, Wi-Fi, NVS or touch initialize; a series
+of `[BOOT-PANEL]` markers at **115200 baud** identifies the point of failure.
+If the checkpoint appears but the UI goes blank afterward, the follow-on
+bus/driver initialization is the suspect. If it never appears, investigate
+panel setup, flash image, and power before changing display inversion again.
 
-Sound now **defaults OFF even for existing preview installations** using a
-one-time NVS migration. Owners may turn it back on in Settings; it then uses
-low-duty PWM (not the original loud 25-50% output), defaults to level 24/255,
-and gates the NS4168 amplifier once per sound sequence instead of pulsing
-its enable pin for every short beep. These changes aim to reduce screen
-flashes caused by amp startup and current draw. They do not prove that an
-underpowered USB supply or hardware power-rail sag cannot still cause flashes.
+Sound defaults OFF and its migration now correctly opens NVS writable.
+On an existing preview installation the new `silent_boot_v3` key ensures
+sound remains muted. Optional sound output uses much lower PWM drive.
 
-## Follow-up: black-screen recovery
-
-**Important regression:** The explicit `invertDisplay(false)` commands
-introduced a completely black screen with no readable text on the physical
-Hosyond. The next build removes those three runtime commands and restores
-the same driver-managed `TFT_INVERSION_ON` startup polarity used by the
-last known *visible* Porkchop build. Touch-bus sharing and default muted
-speaker remain in place. A separate validated color palette change is needed
-before claiming dark-theme colors are correct; controller polarity must not
-be changed blindly. The previous preview can be restored through the full
-USB flasher or an SD launcher with a compatible partition layout.
+Do NOT treat this diagnostic release as hardware-verified. It aims to restore
+known-visible panel initialization first, before any further touch work.

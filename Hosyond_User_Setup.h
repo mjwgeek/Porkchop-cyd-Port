@@ -15,10 +15,7 @@
 #define TFT_BACKLIGHT_ON HIGH
 #define TFT_RGB_ORDER TFT_BGR
 #define TFT_INVERSION_ON
-// Polarity comes from the ST7796S startup configuration below.
-// Runtime invertDisplay(false) caused a blank/black panel on the tested unit.
-// Shared-bus XPT2046: use TFT_eSPI, NOT another SPIClass on LCD pins.
-#define TOUCH_CS 33
+// XPT2046 is separately owned by the sketch. Do not define TOUCH_CS here.
 #define SPI_FREQUENCY 40000000
 #define SPI_READ_FREQUENCY 20000000
 #define SPI_TOUCH_FREQUENCY 2500000
