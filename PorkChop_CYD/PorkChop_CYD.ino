@@ -115,6 +115,9 @@
 #define TOP_BAR_H     20
 #define BOTTOM_BAR_H  20
 #define MAIN_H        (DISPLAY_H - TOP_BAR_H - BOTTOM_BAR_H)
+#ifdef HOSYOND_CYD40
+#include "hosyond_battery.h"
+#endif
 
 // ============================================================
 // THEME SYSTEM (15 themes, matching original exactly)
@@ -3752,6 +3755,14 @@ void drawTopBar() {
            XP::getLevel(), NetworkRecon::getNetworkCount(),
            NetworkRecon::getChannel(), upSec/60, upSec%60,
            WebUI::isActive() ? " AP" : "");
+#ifdef HOSYOND_CYD40
+  // Same 8-sample GPIO34 2:1 LiPo estimator as SquachWatch.
+  const HosyondBattery::Reading& battery=HosyondBattery::sample();
+  char batteryTag[18];
+  if(battery.present) snprintf(batteryTag,sizeof(batteryTag)," BAT:%u%%",(unsigned)battery.percent);
+  else snprintf(batteryTag,sizeof(batteryTag)," NO BAT");
+  strncat(right,batteryTag,sizeof(right)-strlen(right)-1);
+#endif
 
   // Truncate left if it would overlap right
   int rightW = tft.textWidth(right);
@@ -3994,6 +4005,11 @@ void update() {
         tft.drawString(statBuf, DISPLAY_W-2, TOP_BAR_H+12);
         snprintf(statBuf,sizeof(statBuf),"SES %u",XP::getSessions());
         tft.drawString(statBuf, DISPLAY_W-2, TOP_BAR_H+22);
+#ifdef HOSYOND_CYD40
+        // SquachWatch-style glowing, bubbling battery lava lamp on the
+        // left of the larger 4-inch home screen, absent if no cell is fitted.
+        HosyondBattery::drawLavaLamp(tft, 10, TOP_BAR_H+45, 2, millis());
+#endif
       }
       break;
     }
@@ -5267,7 +5283,12 @@ void update() {
         snprintf(b,sizeof(b),"LAST RESET: %d (ESP32 reason)", (int)esp_reset_reason());
         dst.setTextDatum(TL_DATUM);
         dst.drawString(b,lx,y); y += dy;
-        snprintf(b,sizeof(b),"BAT ADC: %umV (GPIO34, not pack voltage)",(unsigned)analogReadMilliVolts(34));
+        char battLine[24];
+        HosyondBattery::format(battLine,sizeof(battLine));
+        snprintf(b,sizeof(b),"BATTERY: %s (LiPo est.)",battLine);
+        dst.drawString(b,lx,y);
+        y += dy;
+        snprintf(b,sizeof(b),"BAT SENSE: %u mV raw GPIO34",(unsigned)analogReadMilliVolts(34));
         dst.drawString(b,lx,y);
 #endif
         dst.setTextDatum(TC_DATUM);

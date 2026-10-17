@@ -5,6 +5,11 @@ ESP32-WROOM-32E display. It does not replace the original 2.8-inch port.
 
 **Firmware web flasher:** https://mjwgeek.github.io/Porkchop-cyd-Port/
 
+**Firmware Releases:** https://github.com/mjwgeek/Porkchop-cyd-Port/releases
+
+Release downloads deliberately contain just two `.bin` files; the browser's
+three lower-level flash parts live separately under `flash/` in GitHub Pages.
+
 The `Build & Publish Porkchop Hosyond 4.0` GitHub Actions workflow
 compiles actual ESP32 binaries, uploads build artifacts and publishes
 a Web Serial installer to the `gh-pages` branch. If the URL returns 404,
@@ -18,9 +23,13 @@ set GitHub Settings > Pages > Deploy from a branch > gh-pages / (root).
 - Speaker PWM GPIO26; amplifier muted when silent
 - No integrated GPS presumed, so UART0 is retained for USB serial
 - In-settings on-screen credentials keyboard (WiGLE username/token, WPA-SEC)
-- Diagnostic display of last ESP32 reset reason and raw battery-sense ADC mV
-  (GPIO34). The ADC mV are NOT calibrated battery-pack voltage and do not
-  imply charger-state detection.
+- Same battery calculations as SquachWatch CYD40: eight averaged GPIO34 ADC
+  readings through the 2:1 battery divider, interpolated LiPo percentage,
+  no-cell detection below 2.5V, and 2-second sampling cache.
+- Same SquachWatch-style animated lava-lamp battery graphic on the idle screen,
+  plus compact percentage in the header and voltage/percentage in Diagnostics.
+- Apparent charging is an **estimate** from rising/falling voltage, not a
+  charger IC signal, and may be misleading under changing load.
 - Low-memory direct display drawing to leave more heap for Wi-Fi capture
 
 ## Flash images
@@ -45,5 +54,6 @@ Hardware still needs hands-on validation (rotation, touch mapping, SD mounting,
 audio, network operations). A compile pass is not hardware proof.
 PIGGY BLUES remains stubbed; forcing the BLE stack into this Wi-Fi-heavy
 build would be premature without memory and Wi-Fi coexistence tests.
-No accurate charge-status icon is possible without a charger-status IC.
+The lava lamp's charging animation is based on the same voltage-trend
+heuristic as SquachWatch; it is not a confirmed charger-status indication.
 SD formatting is intentionally not exposed as a one-tap destructive action.

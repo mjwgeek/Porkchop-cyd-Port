@@ -39,27 +39,51 @@ jobs:
       - name: Assemble browser and Launcher images
         run: |
           set -eu
-          mkdir -p site/firmware
-          cp build/PorkChop_CYD.ino.bootloader.bin site/firmware/bootloader.bin
-          cp build/PorkChop_CYD.ino.partitions.bin site/firmware/partitions.bin
-          cp build/PorkChop_CYD.ino.bin site/firmware/firmware.bin
+          mkdir -p site/firmware site/flash
+          # Three internal flash parts are only for ESP Web Tools.
+          cp build/PorkChop_CYD.ino.bootloader.bin site/flash/bootloader.bin
+          cp build/PorkChop_CYD.ino.partitions.bin site/flash/partitions.bin
+          cp build/PorkChop_CYD.ino.bin site/flash/firmware.bin
           cp build/PorkChop_CYD.ino.bin site/firmware/Porkchop-Hosyond-4.0-Launcher.bin
           python -m esptool --chip esp32 merge_bin \
             --flash_mode dio --flash_freq 80m --flash_size 4MB \
             -o site/firmware/Porkchop-Hosyond-4.0-Full.bin \
-            0x1000 site/firmware/bootloader.bin \
-            0x8000 site/firmware/partitions.bin \
-            0x10000 site/firmware/firmware.bin
+            0x1000 site/flash/bootloader.bin \
+            0x8000 site/flash/partitions.bin \
+            0x10000 site/flash/firmware.bin
           cp web/index.html site/index.html
           cp web/manifest.json site/manifest.json
-          test -s site/firmware/firmware.bin
+          test -s site/flash/firmware.bin
+          test -s site/firmware/Porkchop-Hosyond-4.0-Launcher.bin
           test -s site/firmware/Porkchop-Hosyond-4.0-Full.bin
       - name: Upload firmware images
         uses: actions/upload-artifact@v4
         with:
           name: Porkchop-Hosyond-4.0-Firmware
-          path: site/firmware/*.bin
+          path: |
+            site/firmware/Porkchop-Hosyond-4.0-Launcher.bin
+            site/firmware/Porkchop-Hosyond-4.0-Full.bin
           if-no-files-found: error
+      - name: Publish Hosyond firmware to Releases
+        if: github.ref == 'refs/heads/hosyond-cyd40'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          TAG="hosyond-cyd40-preview"
+          APP="site/firmware/Porkchop-Hosyond-4.0-Launcher.bin"
+          FULL="site/firmware/Porkchop-Hosyond-4.0-Full.bin"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APP" "$FULL" --clobber
+            # This tag is explicitly a rolling, mutable PREVIEW tag.
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="$GITHUB_SHA" -F force=true
+          else
+            gh release create "$TAG" "$APP" "$FULL" \
+              --target "$GITHUB_SHA" \
+              --title "Porkchop · Hosyond 4.0 preview" \
+              --notes "Compiled Hosyond 4.0 ST7796S firmware (hardware testing pending). Launcher.bin is an app-only image requiring a compatible existing app partition; Full.bin is a merged image to flash at offset 0x0. The preview tag and its two assets are updated after successful builds." \
+              --prerelease
+          fi
       - name: Publish the website to gh-pages
         if: github.ref == 'refs/heads/hosyond-cyd40'
         uses: peaceiris/actions-gh-pages@v4
