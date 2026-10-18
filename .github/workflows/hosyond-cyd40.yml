@@ -101,7 +101,9 @@ jobs:
           FULL="site/firmware/Porkchop-Hosyond-4.0-Full.bin"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APP" "$FULL" --clobber
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="$GITHUB_SHA" -F force=true
+            # The install token can replace rolling release assets but cannot
+            # force-update the release tag ref (403 on some repositories).
+            # Keep the ref stable; the .bin assets carry the latest build.
           else
             gh release create "$TAG" "$APP" "$FULL" \
               --target "$GITHUB_SHA" --prerelease \
@@ -120,7 +122,9 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APP" "$FULL" --clobber
             # This tag is explicitly a rolling, mutable PREVIEW tag.
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="$GITHUB_SHA" -F force=true
+            # The install token can replace rolling release assets but cannot
+            # force-update the release tag ref (403 on some repositories).
+            # Keep the ref stable; the .bin assets carry the latest build.
           else
             gh release create "$TAG" "$APP" "$FULL" \
               --target "$GITHUB_SHA" \
