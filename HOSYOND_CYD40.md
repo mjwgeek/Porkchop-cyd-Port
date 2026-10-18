@@ -85,7 +85,7 @@ known-visible panel initialization first, before any further touch work.
 
 The `hosyond-cyd40-render-test` branch **never replaces** the normal
 rolling preview release or GitHub Pages. It publishes separate downloadable
-experimental `.bin` files at
+experimental `.bin` files and a test-only `ota.json` at
 https://github.com/mjwgeek/Porkchop-cyd-Port/releases/tag/hosyond-cyd40-display-ota-test
 and build artifacts in GitHub Actions. Merge only after
 owner testing verifies red/green/blue polarity, dark background, smooth static
@@ -98,7 +98,8 @@ All OTA URLs are hardcoded to **mjwgeek/Porkchop-cyd-Port**:
 - App image: https://mjwgeek.github.io/Porkchop-cyd-Port/flash/firmware.bin
 
 The GitHub workflow generates build number, image size and SHA-256 from the
-**same compiled firmware** that it publishes. A manual update requires owner
+**same compiled firmware** that it publishes; the test branch points these
+fields at the isolated prerelease asset while production points at Pages. A manual update requires owner
 confirmation on the device (Settings > check OTA > install OTA). It checks the
 image size against the second OTA slot and verifies the flashed partition's
 SHA-256 before reboot. A failed download does not intentionally change the
@@ -107,29 +108,48 @@ running slot. There is **no automatic installation**.
 In Settings, enter Wi-Fi SSID and password with the on-screen keyboard first.
 When checking for updates the app stops background Wi-Fi channel hopping,
 joins that network temporarily, then disconnects and resumes reconnaissance.
-The OTA button shows the local rN build number. A test-branch build will not
-find its own version in the live OTA manifest until this branch is merged
-and its workflow has successfully published to GitHub Pages.
+The OTA button shows the local rN build number and detected update route
+(dual-slot OTA or Wi-Fi-to-SD launcher update). The test branch now publishes
+its own manifest alongside its own two BIN assets, so it can check/update
+independently of GitHub Pages. The stable branch continues to use Pages.
 
-### One-time full flash required
+### Existing launcher and OTA compatibility (no USB required for SD updates)
 
-The previous `huge_app` partition table had only one application slot.
-A launcher/app-only BIN **cannot** change that partition table and therefore
-cannot enable OTA by itself. The first OTA-capable installation requires
-flashing the FULL merged image at flash address 0x0 or the three components
-(bootloader at 0x1000, partition table at 0x8000 and app at 0x10000).
-**Back up saved credentials and captures first.** Changing partitions can
-erase or invalidate NVS and SPIFFS contents. Do not use the Full.bin image
-in an app-only SD-card launcher.
+Do **not** assume the board needs a full serial flash. FlightRadar in
+`mjwgeek/eiswolfs-flightradar-CYD` already supports OTA using the
+`min_spiffs.csv` layout, so an installation on that layout can have OTA0
+and OTA1 ready.
 
-The new 4MB partition layout is:
+PorkChop now inspects its **actual running partition table at runtime**:
+- If it runs from OTA0/OTA1, has a distinct, sufficiently large second slot,
+  and that slot is erased or already contains another PorkChop build, it can
+  flash a new image OTA and reboot after SHA-256 verification.
+- If the board has a single-slot layout, or the second slot contains another
+  application (potentially the user's SD launcher), PorkChop **does not
+  overwrite that slot**. It downloads the new firmware over Wi-Fi directly
+  to `/Porkchop-Hosyond-4.0-Launcher.bin` on the SD card, checks the image
+  SHA-256, and prompts the owner to select that BIN in the existing launcher.
+  This requires **no SD-card removal and no USB connection**. It is a
+  Wi-Fi-to-SD update, *not* an automatic OTA reboot/swap.
+- With no safe OTA slot **and** no SD card, the update fails closed.
+
+The isolated test build fetches `ota.json` and the corresponding app
+BIN from its own GitHub prerelease
+`hosyond-cyd40-display-ota-test`, leaving the stable preview and live
+GitHub Pages feed unchanged.
+
+A user who *wants* fully automatic slot-switching OTA, but has only a
+single-slot partition layout, may still need a one-time partition migration.
+That is **optional for the Wi-Fi-to-SD update workflow** and should never
+be forced or attempted silently.
+
+For reference, the experimental full-image 4MB partition layout is:
 - OTA0: 0x10000, 0x1B0000 bytes
 - OTA1: 0x1C0000, 0x1B0000 bytes
 - SPIFFS: 0x370000, 0x90000 bytes
 
 Each firmware build fails CI if it exceeds the OTA slot's 0x1B0000-byte
-capacity. For installations still using an old single-slot layout, the
-Settings updater refuses to run and asks for the one-time full flash.
+capacity. The app-only Launcher BIN does not alter partitions or bootloader.
 
 Security note: the experimental OTA client validates image size and SHA-256
 from the fork's HTTPS manifest, but currently disables TLS CA verification
