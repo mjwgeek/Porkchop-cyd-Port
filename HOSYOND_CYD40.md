@@ -83,9 +83,11 @@ known-visible panel initialization first, before any further touch work.
 
 ## Experimental display recovery and OTA (test branch only)
 
-The `hosyond-cyd40-render-test` branch is **not** auto-published to the
-rolling preview release or GitHub Pages. Test builds are available from its
-GitHub Actions **Porkchop-Hosyond-4.0-Firmware** artifact. Merge only after
+The `hosyond-cyd40-render-test` branch **never replaces** the normal
+rolling preview release or GitHub Pages. It publishes separate downloadable
+experimental `.bin` files at
+https://github.com/mjwgeek/Porkchop-cyd-Port/releases/tag/hosyond-cyd40-display-ota-test
+and build artifacts in GitHub Actions. Merge only after
 owner testing verifies red/green/blue polarity, dark background, smooth static
 menus, touch, boot and network capture.
 
