@@ -4562,9 +4562,13 @@ void update() {
         dst.drawString(cfg.wpasecKey[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+178);
         snprintf(row,sizeof(row),"GHOST MODE: %s [tap]", cfg.ghostMode?"ON":"OFF");
         dst.drawString(row, 10, yOff+207);
+        dst.drawString(PorkchopOta::compatible() ? "OTA SLOT READY" : "WIFI UPDATE VIA SD LAUNCHER",
+                       DISPLAY_W/2+10, yOff+207);
         dst.drawRoundRect(8, yOff+221, DISPLAY_W-16, 33, 4, colorFG());
         snprintf(row,sizeof(row),"%s  |  BUILD r%lu",
-                 PorkchopOta::isAvailable() ? "TAP TO INSTALL UPDATE" : "CHECK WIFI OTA",
+                 PorkchopOta::isAvailable()
+                   ? (PorkchopOta::compatible() ? "INSTALL WIFI OTA" : "SAVE UPDATE TO SD")
+                   : "CHECK WIFI UPDATE",
                  (unsigned long)PORKCHOP_FW_BUILD);
         dst.drawString(row, 18, yOff+224);
         dst.drawString(PorkchopOta::getStatus(),18,yOff+237);
