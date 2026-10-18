@@ -8,6 +8,12 @@ on:
 permissions:
   contents: write
 
+# Only the newest commit may publish the mutable preview/test release.
+# Concurrent runs otherwise race and can replace the new BIN with an old BIN.
+concurrency:
+  group: hosyond-cyd40-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   firmware:
     runs-on: ubuntu-latest
