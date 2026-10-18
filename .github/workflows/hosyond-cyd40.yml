@@ -38,9 +38,13 @@ jobs:
       - name: Compile Hosyond 4.0 firmware
         run: |
           mkdir -p build
+          OTA_CHANNEL_FLAG=""
+          if [ "${GITHUB_REF_NAME}" = "hosyond-cyd40-render-test" ]; then
+            OTA_CHANNEL_FLAG="-DPORKCHOP_TEST_CHANNEL=1"
+          fi
           arduino-cli compile \
             --fqbn esp32:esp32:esp32:PartitionScheme=custom,FlashMode=dio,FlashFreq=80,FlashSize=4M \
-            --build-property "build.extra_flags=-DHOSYOND_CYD40=1 -DPORKCHOP_FW_BUILD=${GITHUB_RUN_NUMBER}" \
+            --build-property "build.extra_flags=-DHOSYOND_CYD40=1 -DPORKCHOP_FW_BUILD=${GITHUB_RUN_NUMBER} ${OTA_CHANNEL_FLAG}" \
             --output-dir ./build \
             ./PorkChop_CYD
       - name: Assemble browser and Launcher images
@@ -57,10 +61,17 @@ jobs:
           import os, hashlib, json
           from pathlib import Path
           firmware = Path("site/flash/firmware.bin")
+          test_channel = os.environ.get("GITHUB_REF_NAME") == "hosyond-cyd40-render-test"
+          firmware_url = (
+              "https://github.com/mjwgeek/Porkchop-cyd-Port/releases/download/"
+              "hosyond-cyd40-display-ota-test/Porkchop-Hosyond-4.0-Launcher.bin"
+              if test_channel else
+              "https://mjwgeek.github.io/Porkchop-cyd-Port/flash/firmware.bin"
+          )
           manifest = {
               "build": int(os.environ["GITHUB_RUN_NUMBER"]),
               "version": "preview.r" + os.environ["GITHUB_RUN_NUMBER"],
-              "firmware": "https://mjwgeek.github.io/Porkchop-cyd-Port/flash/firmware.bin",
+              "firmware": firmware_url,
               "bytes": firmware.stat().st_size,
               "sha256": hashlib.sha256(firmware.read_bytes()).hexdigest(),
           }
@@ -100,12 +111,12 @@ jobs:
           APP="site/firmware/Porkchop-Hosyond-4.0-Launcher.bin"
           FULL="site/firmware/Porkchop-Hosyond-4.0-Full.bin"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$APP" "$FULL" --clobber
+            gh release upload "$TAG" "$APP" "$FULL" site/ota.json --clobber
             # The install token can replace rolling release assets but cannot
             # force-update the release tag ref (403 on some repositories).
             # Keep the ref stable; the .bin assets carry the latest build.
           else
-            gh release create "$TAG" "$APP" "$FULL" \
+            gh release create "$TAG" "$APP" "$FULL" site/ota.json \
               --target "$GITHUB_SHA" --prerelease \
               --title "EXPERIMENTAL: Porkchop Hosyond display + OTA" \
               --notes "Hardware validation pending. TEST branch only; live preview unchanged. Launcher is app-only; Full modifies bootloader/partitions and may erase settings or captures. No OTA update feed is deployed from this branch."
