@@ -467,6 +467,17 @@ void rotateScreen(); // forward decl — defined near loadConfig(), called earli
 PorkchopMode currentMode = PorkchopMode::IDLE;
 #ifdef HOSYOND_CYD40
 static uint32_t g_cydUiGeneration = 0;  // incremented only for actual input
+// Retained across a crash/reset, unlike Serial output which is easily missed.
+// A breadcrumb identifies whether the last active mode was updating its
+// radio subsystem or drawing to the LCD. Read it on the SD card next boot.
+struct HosyondCrashTrace {
+  uint32_t magic;
+  uint32_t mode;
+  uint32_t phase;  // 0=between loops, 1=mode services, 2=display
+  uint32_t freeHeap;
+};
+RTC_DATA_ATTR static HosyondCrashTrace g_hosyondCrashTrace;
+static const uint32_t HOSYOND_CRASH_MAGIC = 0x50434C44UL;
 #endif
 static uint8_t achScroll     = 0;     // Achievements screen scroll offset
 static uint8_t achDetailIdx  = 0;     // Achievements detail popup: selected index
@@ -13014,6 +13025,22 @@ void setup() {
   delay(100);
   Serial.println("\n=== PORKCHOP CYD v6 STARTING (NM-RF-HAT GPS build) ===");
   Serial.printf("[HEAP] startup: free=%u largest=%u\n", ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+#ifdef HOSYOND_CYD40
+  const esp_reset_reason_t lastResetReason = esp_reset_reason();
+  const uint32_t previousMode = g_hosyondCrashTrace.magic == HOSYOND_CRASH_MAGIC ?
+                               g_hosyondCrashTrace.mode : UINT32_MAX;
+  const uint32_t previousPhase = g_hosyondCrashTrace.magic == HOSYOND_CRASH_MAGIC ?
+                                g_hosyondCrashTrace.phase : UINT32_MAX;
+  const uint32_t previousHeap = g_hosyondCrashTrace.magic == HOSYOND_CRASH_MAGIC ?
+                               g_hosyondCrashTrace.freeHeap : 0;
+  Serial.printf("[RESET] reason=%d previous_mode=%lu phase=%lu heap=%lu\n",
+                (int)lastResetReason, (unsigned long)previousMode,
+                (unsigned long)previousPhase, (unsigned long)previousHeap);
+  g_hosyondCrashTrace.magic = HOSYOND_CRASH_MAGIC;
+  g_hosyondCrashTrace.mode = (uint32_t)PorkchopMode::IDLE;
+  g_hosyondCrashTrace.phase = 0;
+  g_hosyondCrashTrace.freeHeap = ESP.getFreeHeap();
+#endif
 
 #if GPS_ENABLED
   // --- NM-RF-HAT GPS pin arbitration ---
@@ -13102,6 +13129,19 @@ void setup() {
     if (!sdFoldersOk) Serial.println("[SD] one or more required folders missing after mkdir attempt");
   }
   Serial.printf("[SD] Post-init heap: %u largest: %u\n", ESP.getFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+#ifdef HOSYOND_CYD40
+  // Panic/WDT reset data persists in RTC RAM even when the serial monitor
+  // was not connected. The user can retrieve /logs/reset-history.txt from SD.
+  if (sdAvailable) {
+    File resetLog = SD.open("/logs/reset-history.txt", FILE_APPEND);
+    if (resetLog) {
+      resetLog.printf("reset=%d last_mode=%lu phase=%lu heap=%lu\n",
+                      (int)lastResetReason, (unsigned long)previousMode,
+                      (unsigned long)previousPhase, (unsigned long)previousHeap);
+      resetLog.close();
+    }
+  }
+#endif
 
   // WiFi — after SD
   WiFi.persistent(false); WiFi.mode(WIFI_STA); WiFi.disconnect(true,false);
@@ -13290,6 +13330,11 @@ void loop() {
   }
 
   // Update active mode
+#ifdef HOSYOND_CYD40
+  g_hosyondCrashTrace.mode = (uint32_t)currentMode;
+  g_hosyondCrashTrace.phase = 1;
+  g_hosyondCrashTrace.freeHeap = ESP.getFreeHeap();
+#endif
   switch(currentMode){
     case PorkchopMode::OINK_MODE:       NetworkRecon::drainRings(); OinkMode::update(); break;
     case PorkchopMode::DNH_MODE:        NetworkRecon::drainRings(); DNHMode::update(); break;
@@ -13321,7 +13366,15 @@ void loop() {
   Weather::setMoodLevel(Mood::getCurrentHappiness());
   Weather::update();
   handleInput();
+#ifdef HOSYOND_CYD40
+  g_hosyondCrashTrace.mode = (uint32_t)currentMode;
+  g_hosyondCrashTrace.phase = 2;
+  g_hosyondCrashTrace.freeHeap = ESP.getFreeHeap();
+#endif
   Display::update();
+#ifdef HOSYOND_CYD40
+  g_hosyondCrashTrace.phase = 0;
+#endif
 
   static uint32_t lastHeapLog=0, lastXPSave=0;
   uint32_t now=millis();
