@@ -2457,6 +2457,16 @@ template<typename T>
 void draw(T& dst, int yOff) {
   if (!inited) { for (uint8_t i=0;i<CIRCUITPULSE_COUNT;i++) respawn(i); inited = true; }
 
+#ifdef HOSYOND_CYD40
+  // Retained-mode display: static decoration only.  Moving pulse pixels
+  // would leave permanent trails when the full background is not wiped.
+  uint16_t dim = silhouetteColor(22);
+  for (uint8_t i=0;i<TRACE_COUNT;i++) {
+    const Trace& tr = TRACES[i];
+    dst.drawLine(tr.x1, yOff+tr.y1, tr.x2, yOff+tr.y2, dim);
+  }
+  return;
+#endif
   // Faint trace lines — cheap, drawn every frame
   uint16_t dim = silhouetteColor(22);
   for (uint8_t i=0;i<TRACE_COUNT;i++) {
@@ -3960,39 +3970,76 @@ void update() {
   }
 
 #ifdef HOSYOND_CYD40
-  // On the 480x320 panel we deliberately do not reserve the ~134 KB needed
-  // for a full 8-bit frame buffer.  Static menus must therefore be painted
-  // only when their content changes: clearing and redrawing 480x280 pixels
-  // in every pass causes the dramatic white/black blink seen on hardware.
+  // The Cardputer original composites into an RGB332 canvas and pushes it
+  // once.  A 480x280 RGB332 canvas would cost 134,400 bytes on this WROOM32E,
+  // depriving the Wi-Fi modes of the contiguous heap they need.  Instead, use
+  // a retained screen: paint the page when it changes and refresh live data
+  // at bounded intervals WITHOUT erasing the entire LCD on every loop.
   static PorkchopMode presentedMode = (PorkchopMode)255;
-  static int8_t presentedSelection = -1;
+  static int presentedSelection = -1;
   static uint8_t presentedTheme = 255;
-  static bool presentedToast = false;
-  static uint32_t lastMenuHeaderMs = 0;
   static uint32_t lastInputGeneration = UINT32_MAX;
+  static uint32_t lastContentMs = 0;
+  static uint32_t lastStatusMs = 0;
+  static bool presentedOverlay = false;
   const uint32_t frameMs = millis();
-  bool menuChanged = currentMode != presentedMode ||
-                     menuSel != presentedSelection ||
-                     cfg.themeIndex != presentedTheme ||
-                     g_cydUiGeneration != lastInputGeneration;
-  bool menuOverlay = toastActive || _luActive || _captureFlashActive ||
-                     _deauthPulseActive || _achCelebActive || _achLedCycleActive;
-  // Menu and Settings are effectively static; only redraw when the owner
-  // taps, the screen changes, or a transient overlay needs an update.
-  if ((currentMode == PorkchopMode::MENU || currentMode == PorkchopMode::SETTINGS) &&
-      !menuChanged && !menuOverlay && !presentedToast) {
-    // Refresh the changing clock/network counters without touching the menu.
-    if (frameMs - lastMenuHeaderMs >= 1000) {
+  const bool overlayNow = toastActive || _luActive || _captureFlashActive ||
+                          _deauthPulseActive || _achCelebActive || _achLedCycleActive;
+  const bool hosyondRepaintBackground =
+      currentMode != presentedMode ||
+      menuSel != presentedSelection ||
+      cfg.themeIndex != presentedTheme ||
+      g_cydUiGeneration != lastInputGeneration ||
+      (presentedOverlay && !overlayNow);
+  uint32_t contentPeriodMs = 0;
+  switch (currentMode) {
+    case PorkchopMode::MENU:
+    case PorkchopMode::SETTINGS:
+    case PorkchopMode::ABOUT:
+    case PorkchopMode::CAPTURES:
+    case PorkchopMode::ACHIEVEMENTS:
+    case PorkchopMode::BOUNTY_STATUS:
+    case PorkchopMode::UNLOCKABLES:
+      contentPeriodMs = 0; // event-driven screens
+      break;
+    case PorkchopMode::IDLE:
+      contentPeriodMs = 0; // keep the larger screen stable; status remains live
+      break;
+    case PorkchopMode::SPECTRUM_MODE:
+      contentPeriodMs = 350;
+      break;
+    case PorkchopMode::PIG_PARTY:
+    case PorkchopMode::MATRIX_MODE:
+      contentPeriodMs = 125;
+      break;
+    case PorkchopMode::DIAGNOSTICS:
+    case PorkchopMode::SWINE_STATS:
+      contentPeriodMs = 2000;
+      break;
+    default:
+      contentPeriodMs = 650; // active scan/attack/telemetry modes: ~1.5 Hz
+      break;
+  }
+  if (overlayNow && (contentPeriodMs == 0 || contentPeriodMs > 200))
+    contentPeriodMs = 200;
+  const bool drawContent = hosyondRepaintBackground ||
+      (contentPeriodMs != 0 && frameMs - lastContentMs >= contentPeriodMs);
+  if (!drawContent) {
+    // The fast radio/service loop must run regardless of LCD frame rate.
+    if (frameMs - lastStatusMs >= 1000) {
       drawTopBar();
-      lastMenuHeaderMs = frameMs;
+      drawBottomBar();
+      lastStatusMs = frameMs;
     }
     return;
   }
   presentedMode = currentMode;
   presentedSelection = menuSel;
   presentedTheme = cfg.themeIndex;
-  presentedToast = toastActive;
   lastInputGeneration = g_cydUiGeneration;
+  presentedOverlay = overlayNow;
+  lastContentMs = frameMs;
+  lastStatusMs = frameMs;
 #endif
 
   // Mode-transition wipe — detected here rather than in enterMode(), since
@@ -4027,7 +4074,12 @@ void update() {
   if (useSprite) {
     mainSprite.fillSprite(colorBG());
   } else {
-    tft.fillRect(0, TOP_BAR_H, DISPLAY_W, MAIN_H, colorBG());
+#ifdef HOSYOND_CYD40
+    // The first paint of a page may clear; subsequent telemetry refreshes
+    // must keep the already-drawn content visible until replaced.
+    if (hosyondRepaintBackground)
+#endif
+      tft.fillRect(0, TOP_BAR_H, DISPLAY_W, MAIN_H, colorBG());
   }
 
   switch (currentMode) {
@@ -4301,16 +4353,28 @@ void update() {
         Mood::drawBubble();
       } else {
         uint16_t bg = Weather::isThunderFlashing() ? colorFG() : colorBG();
-        tft.fillRect(0, TOP_BAR_H, DISPLAY_W, MAIN_H, bg);
-        int ax = Avatar::getCurrentX(), ay = TOP_BAR_H + 40;
-        int si = (int)Avatar::state; if (si>=7) si=0;
-        const uint8_t* sprite = PIG_SPRITES[si][Avatar::facingRight ? 0 : 1];
-        Avatar::drawSpriteBitmap(tft, sprite, ax, ay, 2, PIG_SPRITE_W, PIG_SPRITE_H);
-        tft.setTextSize(1); tft.setTextColor(colorFG(), bg);
-        tft.drawString(Avatar::getGrassPattern(), 0, TOP_BAR_H+152);
+#ifdef HOSYOND_CYD40
+        // Keep the pig/background in place while only the small telemetry
+        // fields update.  The old full-screen erase ran every 16 ms and
+        // monopolized SPI, visibly flashing before each text repaint.
+        if (hosyondRepaintBackground) {
+#endif
+          tft.fillRect(0, TOP_BAR_H, DISPLAY_W, MAIN_H, bg);
+          int ax = Avatar::getCurrentX(), ay = TOP_BAR_H + 40;
+          int si = (int)Avatar::state; if (si>=7) si=0;
+          const uint8_t* sprite = PIG_SPRITES[si][Avatar::facingRight ? 0 : 1];
+          Avatar::drawSpriteBitmap(tft, sprite, ax, ay, 2, PIG_SPRITE_W, PIG_SPRITE_H);
+          tft.setTextSize(1); tft.setTextColor(colorFG(), bg);
+          tft.drawString(Avatar::getGrassPattern(), 0, TOP_BAR_H+152);
+          tft.setTextDatum(TC_DATUM);
+          tft.drawString(Mood::getCurrentPhrase(), DISPLAY_W/2, TOP_BAR_H+170);
+#ifdef HOSYOND_CYD40
+        }
+        // Restore just the overlays' opaque background, not 134K pixels.
+        tft.fillRect(0, TOP_BAR_H, 240, 38, bg);
+        tft.fillRect(0, TOP_BAR_H+MAIN_H-15, DISPLAY_W, 15, bg);
+#endif
         drawModeOverlay(tft, TOP_BAR_H);
-        tft.setTextDatum(TC_DATUM);
-        tft.drawString(Mood::getCurrentPhrase(), DISPLAY_W/2, TOP_BAR_H+170);
       }
       break;
     }
@@ -4437,7 +4501,19 @@ void update() {
         dst.drawString("TAP-L:< TAP-R:> TAP-C:sel HOLD:back", DISPLAY_W/2, yOff+MAIN_H-20);
       };
       if (useSprite) drawSpec(mainSprite, 0);
-      else           drawSpec(tft,        TOP_BAR_H);
+      else {
+#ifdef HOSYOND_CYD40
+        // Spectrum/waterfall are animated.  Clear ONLY their chart region
+        // before drawing a new sample; leave the rest of the UI intact.
+        if (!hosyondRepaintBackground) {
+          tft.fillRect(SPEC_LEFT, TOP_BAR_H+SPEC_TOP,
+                       SPEC_W, SPEC_BOT-SPEC_TOP+1, colorBG());
+          tft.fillRect(SPEC_LEFT, TOP_BAR_H+WFALL_TOP,
+                       SPEC_W, WFALL_ROWS+1, colorBG());
+        }
+#endif
+        drawSpec(tft, TOP_BAR_H);
+      }
       break;
     }
 
