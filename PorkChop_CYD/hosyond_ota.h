@@ -229,9 +229,9 @@ inline bool saveUpdateOnSd() {
       const int written=http.writeToStream(&output);
       output.flush();
       if (written>0 && (size_t)written==latestSize) success=true;
-      else Serial.printf("[OTA] SD transfer incomplete: wrote=%d expected=%u\\n",
+      else Serial.printf("[OTA] SD transfer incomplete: wrote=%d expected=%u\n",
                          written,(unsigned)latestSize);
-    } else Serial.printf("[OTA] SD HTTP=%d bytes=%d expected=%u\\n",
+    } else Serial.printf("[OTA] SD HTTP=%d bytes=%d expected=%u\n",
                         code,contentBytes,(unsigned)latestSize);
     http.end();
   }
@@ -278,7 +278,7 @@ inline bool saveUpdateOnSd() {
     status("SD UPDATE RENAME FAILED");
     return false;
   }
-  Serial.printf("[OTA] Verified SD BIN saved: %s (%u bytes)\\n",
+  Serial.printf("[OTA] Verified SD BIN saved: %s (%u bytes)\n",
                 finalName,(unsigned)latestSize);
   status("SAVED TO SD - SELECT BIN IN LAUNCHER");
   paint(state,100);
