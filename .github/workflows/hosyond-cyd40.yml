@@ -2,7 +2,7 @@ name: Build & Publish Porkchop Hosyond 4.0
 
 on:
   push:
-    branches: [hosyond-cyd40]
+    branches: [hosyond-cyd40, hosyond-cyd40-render-test]
   workflow_dispatch:
 
 permissions:
