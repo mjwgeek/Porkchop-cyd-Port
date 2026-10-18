@@ -465,6 +465,9 @@ void handle(bool tap,bool hold,int tx,int ty) {
 void rotateScreen(); // forward decl — defined near loadConfig(), called earlier from handleInput()
 
 PorkchopMode currentMode = PorkchopMode::IDLE;
+#ifdef HOSYOND_CYD40
+static uint32_t g_cydUiGeneration = 0;  // incremented only for actual input
+#endif
 static uint8_t achScroll     = 0;     // Achievements screen scroll offset
 static uint8_t achDetailIdx  = 0;     // Achievements detail popup: selected index
 static bool    achDetailShow = false; // Achievements detail popup: visible
@@ -3966,14 +3969,18 @@ void update() {
   static uint8_t presentedTheme = 255;
   static bool presentedToast = false;
   static uint32_t lastMenuHeaderMs = 0;
+  static uint32_t lastInputGeneration = UINT32_MAX;
   const uint32_t frameMs = millis();
   bool menuChanged = currentMode != presentedMode ||
                      menuSel != presentedSelection ||
-                     cfg.themeIndex != presentedTheme;
+                     cfg.themeIndex != presentedTheme ||
+                     g_cydUiGeneration != lastInputGeneration;
   bool menuOverlay = toastActive || _luActive || _captureFlashActive ||
                      _deauthPulseActive || _achCelebActive || _achLedCycleActive;
-  if (currentMode == PorkchopMode::MENU && !menuChanged &&
-      !menuOverlay && !presentedToast) {
+  // Menu and Settings are effectively static; only redraw when the owner
+  // taps, the screen changes, or a transient overlay needs an update.
+  if ((currentMode == PorkchopMode::MENU || currentMode == PorkchopMode::SETTINGS) &&
+      !menuChanged && !menuOverlay && !presentedToast) {
     // Refresh the changing clock/network counters without touching the menu.
     if (frameMs - lastMenuHeaderMs >= 1000) {
       drawTopBar();
@@ -3985,6 +3992,7 @@ void update() {
   presentedSelection = menuSel;
   presentedTheme = cfg.themeIndex;
   presentedToast = toastActive;
+  lastInputGeneration = g_cydUiGeneration;
 #endif
 
   // Mode-transition wipe — detected here rather than in enterMode(), since
@@ -10394,6 +10402,9 @@ void handleInput() {
   }
 
   if (touchEvent==0) return;
+#ifdef HOSYOND_CYD40
+  ++g_cydUiGeneration; // ensure static menu, Settings and keyboard repaint after every gesture
+#endif
   bool isTap=(touchEvent==1), isHold=(touchEvent==2);
   uint32_t holdMs = isHold ? (millis() - Touch::touchStart) : 1000;
   if (isTap)  SFX::play(SFX::CLICK);
