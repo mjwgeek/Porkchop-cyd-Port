@@ -136,3 +136,50 @@ from the fork's HTTPS manifest, but currently disables TLS CA verification
 for compatibility with github.io. A malicious network capable of altering
 both the manifest and download could bypass this integrity check.
 Production use should add certificate validation or a signed update manifest.
+
+## Experimental retained-screen renderer and crash record
+
+The original 0ct0sec M5PORKCHOP composes its UI into a fixed RGB332 canvas,
+then presents the complete frame. Its 240x107 main canvas takes ~25.7 KB.
+The Hosyond main region is 480x280: a matching 8-bit canvas would require
+134.4 KB permanently, not a safe allocation on the ESP32-WROOM-32E while
+Wi-Fi capture and SD buffers are in use.
+
+The test branch therefore uses retained-screen rendering rather than
+blanking/redrawing the complete LCD at 60 Hz:
+
+- MENU, SETTINGS, ABOUT, CAPTURES, ACHIEVEMENTS, BOUNTY, and UNLOCKABLES
+  repaint on user input, mode switch, or theme change.
+- IDLE draws the current avatar as a stable illustration; its header/footer
+  remains live. Animation can be reintroduced with local sprite regions.
+- OINK, DO NO HAM, WARHOG, and other telemetry screens refresh at a bounded
+  rate (~1.5 Hz). Their pig illustration stays on-screen, while only the
+  narrow changing-statistics bands are erased and redrawn.
+- Spectrum re-renders ~3 times per second and only clears its graph/waterfall
+  rather than the full display.
+- Header/footer status redraws at most once per second when main content is
+  unchanged. Easter-egg animations use their own faster frame cadence.
+- The full main background is cleared on an actual page/selection change or
+  when an overlay disappears, not for every live-data update.
+
+**This is a behavioral adaptation of the original canvas approach, not an
+identical port of its whole-frame sprite.** Graphics may still need finer
+regional invalidation after hardware testing, but continuous full-screen
+flashing and SPI saturation should be much reduced.
+
+To help identify the cause if a mode still resets the ESP32, the firmware
+records its last active mode, last loop phase, previous heap, and reset reason
+at each boot. With an inserted writable SD card, retrieve:
+
+`/logs/reset-history.txt`
+
+Each record contains `reset=<ESP-IDF reset reason> last_mode=<mode enum>
+phase=<0/1/2> heap=<free bytes>`. Phase 1 is the per-mode radio/service
+update; phase 2 is the display frame; phase 0 is between frames. A reboot
+reason and this breadcrumb are diagnostic evidence, not proof of a unique
+root cause. The same line is printed at 115200 baud. If crashes persist,
+send the last few records and which mode was selected.
+
+Use the experiment-only **Launcher.bin** on an existing SD-card launcher.
+Do not use the **Full.bin** via an app-only launcher. The primary preview
+and published OTA feed remain untouched until physical verification.
