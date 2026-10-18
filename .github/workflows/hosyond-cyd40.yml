@@ -84,6 +84,24 @@ jobs:
             site/ota.json
             site/flash/firmware.bin
           if-no-files-found: error
+      - name: Publish isolated Hosyond DISPLAY + OTA test binaries
+        if: github.ref == 'refs/heads/hosyond-cyd40-render-test'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          TAG="hosyond-cyd40-display-ota-test"
+          APP="site/firmware/Porkchop-Hosyond-4.0-Launcher.bin"
+          FULL="site/firmware/Porkchop-Hosyond-4.0-Full.bin"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APP" "$FULL" --clobber
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="$GITHUB_SHA" -F force=true
+          else
+            gh release create "$TAG" "$APP" "$FULL" \
+              --target "$GITHUB_SHA" --prerelease \
+              --title "EXPERIMENTAL: Porkchop Hosyond display + OTA" \
+              --notes "Hardware validation pending. TEST branch only; live preview unchanged. Launcher is app-only; Full modifies bootloader/partitions and may erase settings or captures. No OTA update feed is deployed from this branch."
+          fi
       - name: Publish Hosyond firmware to Releases
         if: github.ref == 'refs/heads/hosyond-cyd40'
         env:
