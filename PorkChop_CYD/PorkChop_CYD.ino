@@ -2469,6 +2469,7 @@ void draw(T& dst, int yOff) {
   if (!inited) { for (uint8_t i=0;i<CIRCUITPULSE_COUNT;i++) respawn(i); inited = true; }
 
 #ifdef HOSYOND_CYD40
+  {
   // Retained-mode display: static decoration only.  Moving pulse pixels
   // would leave permanent trails when the full background is not wiped.
   uint16_t dim = silhouetteColor(22);
@@ -2477,6 +2478,7 @@ void draw(T& dst, int yOff) {
     dst.drawLine(tr.x1, yOff+tr.y1, tr.x2, yOff+tr.y2, dim);
   }
   return;
+  }
 #endif
   // Faint trace lines — cheap, drawn every frame
   uint16_t dim = silhouetteColor(22);
