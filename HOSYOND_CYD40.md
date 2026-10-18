@@ -79,3 +79,58 @@ sound remains muted. Optional sound output uses much lower PWM drive.
 
 Do NOT treat this diagnostic release as hardware-verified. It aims to restore
 known-visible panel initialization first, before any further touch work.
+
+
+## Experimental display recovery and OTA (test branch only)
+
+The `hosyond-cyd40-render-test` branch is **not** auto-published to the
+rolling preview release or GitHub Pages. Test builds are available from its
+GitHub Actions **Porkchop-Hosyond-4.0-Firmware** artifact. Merge only after
+owner testing verifies red/green/blue polarity, dark background, smooth static
+menus, touch, boot and network capture.
+
+### Wi-Fi OTA from this fork
+
+All OTA URLs are hardcoded to **mjwgeek/Porkchop-cyd-Port**:
+- Manifest: https://mjwgeek.github.io/Porkchop-cyd-Port/ota.json
+- App image: https://mjwgeek.github.io/Porkchop-cyd-Port/flash/firmware.bin
+
+The GitHub workflow generates build number, image size and SHA-256 from the
+**same compiled firmware** that it publishes. A manual update requires owner
+confirmation on the device (Settings > check OTA > install OTA). It checks the
+image size against the second OTA slot and verifies the flashed partition's
+SHA-256 before reboot. A failed download does not intentionally change the
+running slot. There is **no automatic installation**.
+
+In Settings, enter Wi-Fi SSID and password with the on-screen keyboard first.
+When checking for updates the app stops background Wi-Fi channel hopping,
+joins that network temporarily, then disconnects and resumes reconnaissance.
+The OTA button shows the local rN build number. A test-branch build will not
+find its own version in the live OTA manifest until this branch is merged
+and its workflow has successfully published to GitHub Pages.
+
+### One-time full flash required
+
+The previous `huge_app` partition table had only one application slot.
+A launcher/app-only BIN **cannot** change that partition table and therefore
+cannot enable OTA by itself. The first OTA-capable installation requires
+flashing the FULL merged image at flash address 0x0 or the three components
+(bootloader at 0x1000, partition table at 0x8000 and app at 0x10000).
+**Back up saved credentials and captures first.** Changing partitions can
+erase or invalidate NVS and SPIFFS contents. Do not use the Full.bin image
+in an app-only SD-card launcher.
+
+The new 4MB partition layout is:
+- OTA0: 0x10000, 0x1B0000 bytes
+- OTA1: 0x1C0000, 0x1B0000 bytes
+- SPIFFS: 0x370000, 0x90000 bytes
+
+Each firmware build fails CI if it exceeds the OTA slot's 0x1B0000-byte
+capacity. For installations still using an old single-slot layout, the
+Settings updater refuses to run and asks for the one-time full flash.
+
+Security note: the experimental OTA client validates image size and SHA-256
+from the fork's HTTPS manifest, but currently disables TLS CA verification
+for compatibility with github.io. A malicious network capable of altering
+both the manifest and download could bypass this integrity check.
+Production use should add certificate validation or a signed update manifest.
