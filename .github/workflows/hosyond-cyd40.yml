@@ -2,11 +2,17 @@ name: Build & Publish Porkchop Hosyond 4.0
 
 on:
   push:
-    branches: [hosyond-cyd40]
+    branches: [hosyond-cyd40, hosyond-cyd40-render-test]
   workflow_dispatch:
 
 permissions:
   contents: write
+
+# Only the newest commit may publish the mutable preview/test release.
+# Concurrent runs otherwise race and can replace the new BIN with an old BIN.
+concurrency:
+  group: hosyond-cyd40-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   firmware:
@@ -22,6 +28,7 @@ jobs:
           arduino-cli core update-index --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
           arduino-cli core install esp32:esp32@3.3.7 --additional-urls https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
           arduino-cli lib install "TFT_eSPI"
+          arduino-cli lib install "ArduinoJson"
           arduino-cli lib install "XPT2046_Touchscreen"
           arduino-cli lib install "TinyGPSPlus"
           python -m pip install "esptool>=4,<5"
@@ -31,9 +38,13 @@ jobs:
       - name: Compile Hosyond 4.0 firmware
         run: |
           mkdir -p build
+          OTA_CHANNEL_FLAG=""
+          if [ "${GITHUB_REF_NAME}" = "hosyond-cyd40-render-test" ]; then
+            OTA_CHANNEL_FLAG="-DPORKCHOP_TEST_CHANNEL=1"
+          fi
           arduino-cli compile \
-            --fqbn esp32:esp32:esp32:PartitionScheme=huge_app,FlashMode=dio,FlashFreq=80,FlashSize=4M \
-            --build-property "build.extra_flags=-DHOSYOND_CYD40=1" \
+            --fqbn esp32:esp32:esp32:PartitionScheme=custom,FlashMode=dio,FlashFreq=80,FlashSize=4M \
+            --build-property "build.extra_flags=-DHOSYOND_CYD40=1 -DPORKCHOP_FW_BUILD=${GITHUB_RUN_NUMBER} ${OTA_CHANNEL_FLAG}" \
             --output-dir ./build \
             ./PorkChop_CYD
       - name: Assemble browser and Launcher images
@@ -44,6 +55,30 @@ jobs:
           cp build/PorkChop_CYD.ino.bootloader.bin site/flash/bootloader.bin
           cp build/PorkChop_CYD.ino.partitions.bin site/flash/partitions.bin
           cp build/PorkChop_CYD.ino.bin site/flash/firmware.bin
+          # Two 0x1B0000-byte slots allow safe OTA; reject future oversize builds.
+          test "$(stat -c %s site/flash/firmware.bin)" -le $((0x1B0000))
+          python - <<'PY'
+          import os, hashlib, json
+          from pathlib import Path
+          firmware = Path("site/flash/firmware.bin")
+          test_channel = os.environ.get("GITHUB_REF_NAME") == "hosyond-cyd40-render-test"
+          firmware_url = (
+              "https://github.com/mjwgeek/Porkchop-cyd-Port/releases/download/"
+              "hosyond-cyd40-display-ota-test/Porkchop-Hosyond-4.0-Launcher.bin"
+              if test_channel else
+              "https://mjwgeek.github.io/Porkchop-cyd-Port/flash/firmware.bin"
+          )
+          manifest = {
+              "build": int(os.environ["GITHUB_RUN_NUMBER"]),
+              "version": "preview.r" + os.environ["GITHUB_RUN_NUMBER"],
+              "firmware": firmware_url,
+              "bytes": firmware.stat().st_size,
+              "sha256": hashlib.sha256(firmware.read_bytes()).hexdigest(),
+          }
+          Path("site/ota.json").write_text(
+              json.dumps(manifest, separators=(",", ":")) + "\n", encoding="utf-8")
+          print("Porkchop fork OTA: ", manifest)
+          PY
           cp build/PorkChop_CYD.ino.bin site/firmware/Porkchop-Hosyond-4.0-Launcher.bin
           python -m esptool --chip esp32 merge_bin \
             --flash_mode dio --flash_freq 80m --flash_size 4MB \
@@ -63,7 +98,29 @@ jobs:
           path: |
             site/firmware/Porkchop-Hosyond-4.0-Launcher.bin
             site/firmware/Porkchop-Hosyond-4.0-Full.bin
+            site/ota.json
+            site/flash/firmware.bin
           if-no-files-found: error
+      - name: Publish isolated Hosyond DISPLAY + OTA test binaries
+        if: github.ref == 'refs/heads/hosyond-cyd40-render-test'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          TAG="hosyond-cyd40-display-ota-test"
+          APP="site/firmware/Porkchop-Hosyond-4.0-Launcher.bin"
+          FULL="site/firmware/Porkchop-Hosyond-4.0-Full.bin"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APP" "$FULL" site/ota.json --clobber
+            # The install token can replace rolling release assets but cannot
+            # force-update the release tag ref (403 on some repositories).
+            # Keep the ref stable; the .bin assets carry the latest build.
+          else
+            gh release create "$TAG" "$APP" "$FULL" site/ota.json \
+              --target "$GITHUB_SHA" --prerelease \
+              --title "EXPERIMENTAL: Porkchop Hosyond display + OTA" \
+              --notes "Hardware validation pending. TEST branch only; live preview unchanged. Launcher is app-only; Full modifies bootloader/partitions and may erase settings or captures. No OTA update feed is deployed from this branch."
+          fi
       - name: Publish Hosyond firmware to Releases
         if: github.ref == 'refs/heads/hosyond-cyd40'
         env:
@@ -76,7 +133,9 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "$APP" "$FULL" --clobber
             # This tag is explicitly a rolling, mutable PREVIEW tag.
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/${TAG}" -f sha="$GITHUB_SHA" -F force=true
+            # The install token can replace rolling release assets but cannot
+            # force-update the release tag ref (403 on some repositories).
+            # Keep the ref stable; the .bin assets carry the latest build.
           else
             gh release create "$TAG" "$APP" "$FULL" \
               --target "$GITHUB_SHA" \

@@ -79,3 +79,127 @@ sound remains muted. Optional sound output uses much lower PWM drive.
 
 Do NOT treat this diagnostic release as hardware-verified. It aims to restore
 known-visible panel initialization first, before any further touch work.
+
+
+## Experimental display recovery and OTA (test branch only)
+
+The `hosyond-cyd40-render-test` branch **never replaces** the normal
+rolling preview release or GitHub Pages. It publishes separate downloadable
+experimental `.bin` files and a test-only `ota.json` at
+https://github.com/mjwgeek/Porkchop-cyd-Port/releases/tag/hosyond-cyd40-display-ota-test
+and build artifacts in GitHub Actions. Merge only after
+owner testing verifies red/green/blue polarity, dark background, smooth static
+menus, touch, boot and network capture.
+
+### Wi-Fi OTA from this fork
+
+All OTA URLs are hardcoded to **mjwgeek/Porkchop-cyd-Port**:
+- Manifest: https://mjwgeek.github.io/Porkchop-cyd-Port/ota.json
+- App image: https://mjwgeek.github.io/Porkchop-cyd-Port/flash/firmware.bin
+
+The GitHub workflow generates build number, image size and SHA-256 from the
+**same compiled firmware** that it publishes; the test branch points these
+fields at the isolated prerelease asset while production points at Pages. A manual update requires owner
+confirmation on the device (Settings > check OTA > install OTA). It checks the
+image size against the second OTA slot and verifies the flashed partition's
+SHA-256 before reboot. A failed download does not intentionally change the
+running slot. There is **no automatic installation**.
+
+In Settings, enter Wi-Fi SSID and password with the on-screen keyboard first.
+When checking for updates the app stops background Wi-Fi channel hopping,
+joins that network temporarily, then disconnects and resumes reconnaissance.
+The OTA button shows the local rN build number and detected update route
+(dual-slot OTA or Wi-Fi-to-SD launcher update). The test branch now publishes
+its own manifest alongside its own two BIN assets, so it can check/update
+independently of GitHub Pages. The stable branch continues to use Pages.
+
+### Existing launcher and OTA compatibility (no USB required for SD updates)
+
+Do **not** assume the board needs a full serial flash. FlightRadar in
+`mjwgeek/eiswolfs-flightradar-CYD` already supports OTA using the
+`min_spiffs.csv` layout, so an installation on that layout can have OTA0
+and OTA1 ready.
+
+PorkChop now inspects its **actual running partition table at runtime**:
+- If it runs from OTA0/OTA1, has a distinct, sufficiently large second slot,
+  and that slot is erased or already contains another PorkChop build, it can
+  flash a new image OTA and reboot after SHA-256 verification.
+- If the board has a single-slot layout, or the second slot contains another
+  application (potentially the user's SD launcher), PorkChop **does not
+  overwrite that slot**. It downloads the new firmware over Wi-Fi directly
+  to `/Porkchop-Hosyond-4.0-Launcher.bin` on the SD card, checks the image
+  SHA-256, and prompts the owner to select that BIN in the existing launcher.
+  This requires **no SD-card removal and no USB connection**. It is a
+  Wi-Fi-to-SD update, *not* an automatic OTA reboot/swap.
+- With no safe OTA slot **and** no SD card, the update fails closed.
+
+The isolated test build fetches `ota.json` and the corresponding app
+BIN from its own GitHub prerelease
+`hosyond-cyd40-display-ota-test`, leaving the stable preview and live
+GitHub Pages feed unchanged.
+
+A user who *wants* fully automatic slot-switching OTA, but has only a
+single-slot partition layout, may still need a one-time partition migration.
+That is **optional for the Wi-Fi-to-SD update workflow** and should never
+be forced or attempted silently.
+
+For reference, the experimental full-image 4MB partition layout is:
+- OTA0: 0x10000, 0x1B0000 bytes
+- OTA1: 0x1C0000, 0x1B0000 bytes
+- SPIFFS: 0x370000, 0x90000 bytes
+
+Each firmware build fails CI if it exceeds the OTA slot's 0x1B0000-byte
+capacity. The app-only Launcher BIN does not alter partitions or bootloader.
+
+Security note: the experimental OTA client validates image size and SHA-256
+from the fork's HTTPS manifest, but currently disables TLS CA verification
+for compatibility with github.io. A malicious network capable of altering
+both the manifest and download could bypass this integrity check.
+Production use should add certificate validation or a signed update manifest.
+
+## Experimental retained-screen renderer and crash record
+
+The original 0ct0sec M5PORKCHOP composes its UI into a fixed RGB332 canvas,
+then presents the complete frame. Its 240x107 main canvas takes ~25.7 KB.
+The Hosyond main region is 480x280: a matching 8-bit canvas would require
+134.4 KB permanently, not a safe allocation on the ESP32-WROOM-32E while
+Wi-Fi capture and SD buffers are in use.
+
+The test branch therefore uses retained-screen rendering rather than
+blanking/redrawing the complete LCD at 60 Hz:
+
+- MENU, SETTINGS, ABOUT, CAPTURES, ACHIEVEMENTS, BOUNTY, and UNLOCKABLES
+  repaint on user input, mode switch, or theme change.
+- IDLE draws the current avatar as a stable illustration; its header/footer
+  remains live. Animation can be reintroduced with local sprite regions.
+- OINK, DO NO HAM, WARHOG, and other telemetry screens refresh at a bounded
+  rate (~1.5 Hz). Their pig illustration stays on-screen, while only the
+  narrow changing-statistics bands are erased and redrawn.
+- Spectrum re-renders ~3 times per second and only clears its graph/waterfall
+  rather than the full display.
+- Header/footer status redraws at most once per second when main content is
+  unchanged. Easter-egg animations use their own faster frame cadence.
+- The full main background is cleared on an actual page/selection change or
+  when an overlay disappears, not for every live-data update.
+
+**This is a behavioral adaptation of the original canvas approach, not an
+identical port of its whole-frame sprite.** Graphics may still need finer
+regional invalidation after hardware testing, but continuous full-screen
+flashing and SPI saturation should be much reduced.
+
+To help identify the cause if a mode still resets the ESP32, the firmware
+records its last active mode, last loop phase, previous heap, and reset reason
+at each boot. With an inserted writable SD card, retrieve:
+
+`/logs/reset-history.txt`
+
+Each record contains `reset=<ESP-IDF reset reason> last_mode=<mode enum>
+phase=<0/1/2> heap=<free bytes>`. Phase 1 is the per-mode radio/service
+update; phase 2 is the display frame; phase 0 is between frames. A reboot
+reason and this breadcrumb are diagnostic evidence, not proof of a unique
+root cause. The same line is printed at 115200 baud. If crashes persist,
+send the last few records and which mode was selected.
+
+Use the experiment-only **Launcher.bin** on an existing SD-card launcher.
+Do not use the **Full.bin** via an app-only launcher. The primary preview
+and published OTA feed remain untouched until physical verification.

@@ -14,7 +14,10 @@
 #define TFT_BL 27
 #define TFT_BACKLIGHT_ON HIGH
 #define TFT_RGB_ORDER TFT_BGR
-#define TFT_INVERSION_ON
+// Test polarity for the owner's 4-inch panel: the previous ON setting
+// rendered black as white and green as magenta.  Keep this in the
+// experimental branch until the owner verifies red/green/blue at boot.
+#define TFT_INVERSION_OFF
 // XPT2046 is separately owned by the sketch. Do not define TOUCH_CS here.
 #define SPI_FREQUENCY 40000000
 #define SPI_READ_FREQUENCY 20000000
