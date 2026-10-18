@@ -333,8 +333,24 @@ struct Config {
   bool ghostMode       = false; // MAC randomization
   uint8_t ghostInterval = 5;   // minutes between MAC rotations (1-60)
   uint8_t screenRotation = 3;  // TFT_eSPI rotation value — 1 or 3 (180deg apart, both landscape)
+#ifdef HOSYOND_CYD40
+  char otaWifiSsid[33] = "";
+  char otaWifiPass[65] = "";
+#endif
 } cfg;
 
+#ifndef PORKCHOP_FW_BUILD
+#define PORKCHOP_FW_BUILD 0
+#endif
+#ifdef HOSYOND_CYD40
+namespace PorkchopOta {
+  bool isAvailable();
+  const char* getStatus();
+  bool compatible();
+  bool check();
+  bool install();
+}
+#endif
 
 #ifdef HOSYOND_CYD40
 // Theme helpers are defined below, after the configuration struct.
@@ -343,29 +359,33 @@ inline uint16_t colorBG();
 // Full-width on-screen credential keyboard. Saves to the same NVS fields
 // previously accessible only by serial commands, with secrets masked.
 namespace TouchKeyboard {
-enum Field : uint8_t { None=0, WigleUser, WigleToken, WpasecKey };
+enum Field : uint8_t { None=0, WigleUser, WigleToken, WpasecKey, WifiSsid, WifiPass };
 static Field selected = None;
-static char value[48]={0};
+static char value[65]={0};
 static bool shifted=false, symbols=false;
 bool isOpen() { return selected!=None; }
 void open(Field f) {
   selected=f; shifted=false; symbols=false;
   const char *src = f==WigleUser ? cfg.wigleApiName :
-                    f==WigleToken ? cfg.wigleApiToken : cfg.wpasecKey;
+                    f==WigleToken ? cfg.wigleApiToken :
+                    f==WifiSsid ? cfg.otaWifiSsid :
+                    f==WifiPass ? cfg.otaWifiPass : cfg.wpasecKey;
   strncpy(value,src,sizeof(value)-1); value[sizeof(value)-1]=0;
 }
 template <typename G> void render(G& dst,int yOff) {
   dst.setTextColor(colorFG(),colorBG()); dst.setTextSize(1);
   dst.setTextDatum(TL_DATUM);
   const char* title=selected==WigleUser?"WiGLE username":
-      selected==WigleToken?"WiGLE API token":"WPA-SEC API key";
+      selected==WigleToken?"WiGLE API token":
+      selected==WifiSsid?"Wi-Fi network (SSID)":
+      selected==WifiPass?"Wi-Fi password":"WPA-SEC API key";
   dst.drawString(title,10,yOff+8);
   dst.drawRect(8,yOff+26,DISPLAY_W-16,28,colorFG());
   char visible[48]={0};
   size_t n=strlen(value);
-  if(selected==WigleUser) strncpy(visible,value,sizeof(visible)-1);
+  if(selected==WigleUser || selected==WifiSsid) strncpy(visible,value,sizeof(visible)-1);
   else {
-    size_t shown=n<44?n:44;
+    size_t shown=n<sizeof(visible)-1?n:sizeof(visible)-1;
     for(size_t i=0;i<shown;i++)visible[i]='*';
   }
   dst.drawString(visible,14,yOff+33);
@@ -416,13 +436,22 @@ void handle(bool tap,bool hold,int tx,int ty) {
     if(col==2 && n<sizeof(value)-1) { value[n]=' '; value[n+1]=0; }
     if(col==3 && n) value[n-1]=0;
     if(col==4) {
-      char* dest= selected==WigleUser ? cfg.wigleApiName :
-                  selected==WigleToken ? cfg.wigleApiToken : cfg.wpasecKey;
+      char* dest=selected==WigleUser ? cfg.wigleApiName :
+                 selected==WigleToken ? cfg.wigleApiToken :
+                 selected==WifiSsid ? cfg.otaWifiSsid :
+                 selected==WifiPass ? cfg.otaWifiPass : cfg.wpasecKey;
+      size_t cap=(selected==WifiSsid) ? sizeof(cfg.otaWifiSsid) :
+                 (selected==WifiPass) ? sizeof(cfg.otaWifiPass) :
+                 (selected==WigleUser) ? sizeof(cfg.wigleApiName) :
+                 (selected==WigleToken) ? sizeof(cfg.wigleApiToken) :
+                 sizeof(cfg.wpasecKey);
       const char* key=selected==WigleUser?"wgl_name":
-                      selected==WigleToken?"wgl_token":"wpasec";
-      strcpy(dest,value);
+                      selected==WigleToken?"wgl_token":
+                      selected==WifiSsid?"ota_ssid":
+                      selected==WifiPass?"ota_pass":"wpasec";
+      strlcpy(dest,value,cap);
       prefs.begin("pork",false);
-      prefs.putString(key,value);
+      prefs.putString(key,dest);
       prefs.end();
       memset(value,0,sizeof(value));
       selected=None;
@@ -4419,19 +4448,30 @@ void update() {
         dst.drawString(row, 10, yOff+36);
         snprintf(row,sizeof(row),"SOUND: %s  [tap upper right]", cfg.soundEnabled?"ON":"OFF");
         dst.drawString(row, DISPLAY_W/2+10, yOff+36);
-        dst.drawRoundRect(8, yOff+57, DISPLAY_W-16, 29, 4, colorFG());
-        dst.drawString("EDIT WIGLE USERNAME", 18, yOff+64);
-        dst.drawString(cfg.wigleApiName[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+64);
-        dst.drawRoundRect(8, yOff+92, DISPLAY_W-16, 29, 4, colorFG());
-        dst.drawString("EDIT WIGLE TOKEN", 18, yOff+99);
-        dst.drawString(cfg.wigleApiToken[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+99);
-        dst.drawRoundRect(8, yOff+127, DISPLAY_W-16, 29, 4, colorFG());
-        dst.drawString("EDIT WPA-SEC KEY", 18, yOff+134);
-        dst.drawString(cfg.wpasecKey[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+134);
-        snprintf(row,sizeof(row),"GHOST MODE: %s [tap below]", cfg.ghostMode?"ON":"OFF");
-        dst.drawString(row, 10, yOff+174);
-        dst.drawString("BATTERY ADC: see Diagnostics (GPIO34)", 10, yOff+200);
-        dst.drawString("HOLD TO SAVE + EXIT  |  TOP LEFT: CANCEL", 10, yOff+MAIN_H-20);
+        dst.drawRoundRect(8, yOff+55, DISPLAY_W-16, 27, 4, colorFG());
+        dst.drawString("EDIT WIFI SSID", 18, yOff+62);
+        dst.drawString(cfg.otaWifiSsid[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+62);
+        dst.drawRoundRect(8, yOff+84, DISPLAY_W-16, 27, 4, colorFG());
+        dst.drawString("EDIT WIFI PASSWORD", 18, yOff+91);
+        dst.drawString(cfg.otaWifiPass[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+91);
+        dst.drawRoundRect(8, yOff+113, DISPLAY_W-16, 27, 4, colorFG());
+        dst.drawString("EDIT WIGLE USERNAME", 18, yOff+120);
+        dst.drawString(cfg.wigleApiName[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+120);
+        dst.drawRoundRect(8, yOff+142, DISPLAY_W-16, 27, 4, colorFG());
+        dst.drawString("EDIT WIGLE TOKEN", 18, yOff+149);
+        dst.drawString(cfg.wigleApiToken[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+149);
+        dst.drawRoundRect(8, yOff+171, DISPLAY_W-16, 27, 4, colorFG());
+        dst.drawString("EDIT WPA-SEC KEY", 18, yOff+178);
+        dst.drawString(cfg.wpasecKey[0] ? "(configured)" : "(not set)", DISPLAY_W-125, yOff+178);
+        snprintf(row,sizeof(row),"GHOST MODE: %s [tap]", cfg.ghostMode?"ON":"OFF");
+        dst.drawString(row, 10, yOff+207);
+        dst.drawRoundRect(8, yOff+221, DISPLAY_W-16, 33, 4, colorFG());
+        snprintf(row,sizeof(row),"%s  |  BUILD r%lu",
+                 PorkchopOta::isAvailable() ? "TAP TO INSTALL UPDATE" : "CHECK WIFI OTA",
+                 (unsigned long)PORKCHOP_FW_BUILD);
+        dst.drawString(row, 18, yOff+224);
+        dst.drawString(PorkchopOta::getStatus(),18,yOff+237);
+        dst.drawString("HOLD: SAVE+EXIT   TOP LEFT: CANCEL", 10, yOff+MAIN_H-18);
         return;
 #endif
         CircuitPulse::draw(dst, yOff);
@@ -10526,13 +10566,20 @@ void handleInput() {
       if (isTap) {
         // The 4.0-inch screen provides independently tappable API fields.
         int ry = ty-TOP_BAR_H;
-        if (ry>=57 && ry<86) { TouchKeyboard::open(TouchKeyboard::WigleUser); break; }
-        if (ry>=92 && ry<121) { TouchKeyboard::open(TouchKeyboard::WigleToken); break; }
-        if (ry>=127 && ry<156) { TouchKeyboard::open(TouchKeyboard::WpasecKey); break; }
-        if (ry>=166 && ry<207) {
+        if (ry>=55 && ry<82) { TouchKeyboard::open(TouchKeyboard::WifiSsid); break; }
+        if (ry>=84 && ry<111) { TouchKeyboard::open(TouchKeyboard::WifiPass); break; }
+        if (ry>=113 && ry<140) { TouchKeyboard::open(TouchKeyboard::WigleUser); break; }
+        if (ry>=142 && ry<169) { TouchKeyboard::open(TouchKeyboard::WigleToken); break; }
+        if (ry>=171 && ry<198) { TouchKeyboard::open(TouchKeyboard::WpasecKey); break; }
+        if (ry>=201 && ry<218) {
           cfg.ghostMode=!cfg.ghostMode;
           GhostMode::apply();
           Display::showToast(cfg.ghostMode?"GHOST ON":"GHOST OFF",1500);
+          break;
+        }
+        if (ry>=221 && ry<254) {
+          if (PorkchopOta::isAvailable()) PorkchopOta::install();
+          else PorkchopOta::check();
           break;
         }
         if (ry>=30 && ry<55) {
@@ -10852,6 +10899,8 @@ void loadConfig() {
   prefs.getString("wgl_token",cfg.wigleApiToken,sizeof(cfg.wigleApiToken));
   prefs.getString("wpasec",cfg.wpasecKey,sizeof(cfg.wpasecKey));
 #ifdef HOSYOND_CYD40
+  prefs.getString("ota_ssid",cfg.otaWifiSsid,sizeof(cfg.otaWifiSsid));
+  prefs.getString("ota_pass",cfg.otaWifiPass,sizeof(cfg.otaWifiPass));
   // Read NVS using writable Preferences, then migrate old loud previews once.
   // prefs.begin("pork", false) is required: putBool in read-only mode fails.
   cfg.soundEnabled = prefs.getBool("sound", false);
@@ -12858,6 +12907,10 @@ void uploadAll() {
 bool isBusy() { return _busy; }
 
 } // namespace WPASecUpload
+
+#ifdef HOSYOND_CYD40
+#include "hosyond_ota.h"
+#endif
 
 // ============================================================
 // SETUP
