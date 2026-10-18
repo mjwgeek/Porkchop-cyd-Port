@@ -24,6 +24,8 @@ static size_t latestSize = 0;
 static char latestSha[65] = {};
 static char state[76] = "TAP CHECK TO SEARCH FOR UPDATES";
 static bool busy = false;
+inline bool isAvailable() { return available; }
+inline const char* getStatus() { return state; }
 
 inline void status(const char* msg) {
   snprintf(state, sizeof(state), "%s", msg);
