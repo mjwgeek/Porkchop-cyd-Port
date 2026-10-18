@@ -1,6 +1,7 @@
 #pragma once
-// Hosyond CYD40 - manual, confirmed OTA from the owner's fork ONLY.
-// Requires the custom two-slot partition CSV installed with a FULL flash.
+// Hosyond CYD40 - manual, confirmed updates from the owner's fork ONLY.
+// Reuse existing dual OTA slots where safe. Otherwise save the verified
+// image to SD for the user's existing launcher; never rewrite partitions.
 #ifdef HOSYOND_CYD40
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
@@ -9,14 +10,23 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <mbedtls/sha256.h>
+#include <SD.h>
 
 #ifndef PORKCHOP_FW_BUILD
 #define PORKCHOP_FW_BUILD 0
 #endif
 
 namespace PorkchopOta {
+#ifdef PORKCHOP_TEST_CHANNEL
+// TEST firmware checks the isolated release, not the live Pages feed.
+static constexpr const char* kManifest =
+    "https://github.com/mjwgeek/Porkchop-cyd-Port/releases/download/hosyond-cyd40-display-ota-test/ota.json";
+static constexpr const char* kFirmware =
+    "https://github.com/mjwgeek/Porkchop-cyd-Port/releases/download/hosyond-cyd40-display-ota-test/Porkchop-Hosyond-4.0-Launcher.bin";
+#else
 static constexpr const char* kManifest = "https://mjwgeek.github.io/Porkchop-cyd-Port/ota.json";
 static constexpr const char* kFirmware = "https://mjwgeek.github.io/Porkchop-cyd-Port/flash/firmware.bin";
+#endif
 static constexpr const char* kAgent = "Porkchop-Hosyond-CYD40-OTA/1.0 (mjwgeek/Porkchop-cyd-Port)";
 static bool available = false;
 static uint32_t latestBuild = 0;
@@ -31,8 +41,32 @@ inline void status(const char* msg) {
   snprintf(state, sizeof(state), "%s", msg);
   Serial.printf("[OTA] %s\n", state);
 }
+inline bool isOtaSlot(const esp_partition_t* p) {
+  return p && p->type == ESP_PARTITION_TYPE_APP &&
+      (p->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0 ||
+       p->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_1);
+}
 inline bool compatible() {
-  return esp_ota_get_next_update_partition(nullptr) != nullptr;
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  const esp_partition_t* target = esp_ota_get_next_update_partition(nullptr);
+  if (!isOtaSlot(running) || !isOtaSlot(target) ||
+      running->address == target->address ||
+      target->size < 1600000) return false;
+
+  // An SD-card launcher or a different firmware may occupy the other OTA
+  // slot. NEVER clobber that app: fall back to SD download instead.
+  esp_app_desc_t currentApp = {};
+  esp_app_desc_t targetApp = {};
+  if (esp_ota_get_partition_description(running, &currentApp) != ESP_OK)
+    return false;
+  if (esp_ota_get_partition_description(target, &targetApp) == ESP_OK)
+    return strncmp(currentApp.project_name, targetApp.project_name,
+                   sizeof(currentApp.project_name)) == 0;
+  // A completely erased slot is safe. Unknown/non-erased app images are not.
+  uint32_t firstWord = 0;
+  if (esp_partition_read(target, 0, &firstWord, sizeof(firstWord)) != ESP_OK)
+    return false;
+  return firstWord == UINT32_MAX;
 }
 inline void paint(const char* line, uint8_t pct = 255) {
   tft.fillRect(8, TOP_BAR_H + 218, DISPLAY_W - 16, 48, colorBG());
@@ -48,7 +82,10 @@ inline void paint(const char* line, uint8_t pct = 255) {
 inline bool connect() {
   if (WebUI::isActive()) { status("STOP WEB REMOTE FIRST"); return false; }
   if (!cfg.otaWifiSsid[0]) { status("SET WIFI SSID AND PASSWORD FIRST"); return false; }
-  if (!compatible()) { status("FULL USB FLASH NEEDED ONCE FOR OTA"); return false; }
+  if (!compatible() && !sdAvailable) {
+    status("NO FREE OTA SLOT OR SD CARD");
+    return false;
+  }
   // Stop 300ms channel hopping; an associated STA cannot stay connected
   // while NetworkRecon is retuning the WiFi radio.
   if (scanInProgress) { WiFi.scanDelete(); scanInProgress = false; }
@@ -114,8 +151,9 @@ inline bool check() {
           memcpy(latestSha,hash,65);
           if (build>PORKCHOP_FW_BUILD) {
             available=true;
-            snprintf(state,sizeof(state),"r%lu AVAILABLE - TAP INSTALL",
-                     (unsigned long)build);
+            snprintf(state,sizeof(state),"r%lu AVAILABLE - %s",
+                     (unsigned long)build,
+                     compatible() ? "TAP INSTALL OTA" : "TAP SAVE TO SD");
           } else {
             snprintf(state,sizeof(state),"UP TO DATE (r%lu)",
                      (unsigned long)PORKCHOP_FW_BUILD);
@@ -158,6 +196,94 @@ inline bool verifyPartition(const esp_partition_t* slot, size_t length,
   actual[64]=0;
   return strcmp(actual,expected)==0;
 }
+// For SD launchers with a single app slot (or a protected launcher app in
+// the other slot), download a verified application BIN rather than requiring
+// a risky partition-table rewrite or overwriting the launcher.
+inline bool saveUpdateOnSd() {
+  if (!sdAvailable || latestSize < 1024) {
+    status("SD CARD REQUIRED TO SAVE UPDATE");
+    return false;
+  }
+  const char* tempName="/Porkchop-Hosyond-OTA.part";
+  const char* finalName="/Porkchop-Hosyond-4.0-Launcher.bin";
+  if (SD.totalBytes() - SD.usedBytes() < latestSize + 32768) {
+    status("NOT ENOUGH FREE SD SPACE");
+    return false;
+  }
+  SD.remove(tempName);
+  File output=SD.open(tempName, FILE_WRITE);
+  if (!output) { status("SD FILE CREATE FAILED"); return false; }
+  paint("OTA: SAVING NEW FIRMWARE TO SD ...", 0);
+  WiFiClientSecure tls;
+  tls.setInsecure(); // Test-only: must harden HTTPS validation later.
+  tls.setTimeout(18000);
+  HTTPClient http;
+  http.setTimeout(18000);
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  bool success=false;
+  if (http.begin(tls,kFirmware)) {
+    const int code=http.GET();
+    const int contentBytes=http.getSize();
+    if (code==HTTP_CODE_OK && contentBytes>0 &&
+        (size_t)contentBytes==latestSize) {
+      const int written=http.writeToStream(&output);
+      output.flush();
+      if (written>0 && (size_t)written==latestSize) success=true;
+      else Serial.printf("[OTA] SD transfer incomplete: wrote=%d expected=%u\\n",
+                         written,(unsigned)latestSize);
+    } else Serial.printf("[OTA] SD HTTP=%d bytes=%d expected=%u\\n",
+                        code,contentBytes,(unsigned)latestSize);
+    http.end();
+  }
+  output.close();
+  if (!success) {
+    SD.remove(tempName);
+    status("SD UPDATE DOWNLOAD FAILED");
+    return false;
+  }
+
+  File verify=SD.open(tempName,FILE_READ);
+  if (!verify) {
+    SD.remove(tempName);
+    status("SD UPDATE VERIFY OPEN FAILED");
+    return false;
+  }
+  mbedtls_sha256_context ctx;
+  mbedtls_sha256_init(&ctx);
+  mbedtls_sha256_starts(&ctx,0);
+  uint8_t block[2048];
+  size_t hashed=0;
+  while (verify.available() && hashed<latestSize) {
+    const int n=verify.read(block,sizeof(block));
+    if(n<=0) break;
+    mbedtls_sha256_update(&ctx,block,n);
+    hashed+=(size_t)n;
+  }
+  verify.close();
+  uint8_t digest[32];
+  mbedtls_sha256_finish(&ctx,digest);
+  mbedtls_sha256_free(&ctx);
+  char actual[65];
+  for (int i=0;i<32;i++) snprintf(actual+i*2,3,"%02x",digest[i]);
+  actual[64]=0;
+  if (hashed!=latestSize || strcmp(actual,latestSha)!=0) {
+    SD.remove(tempName);
+    status("SD UPDATE HASH MISMATCH");
+    return false;
+  }
+  // Never remove the last known-good download unless its replacement has
+  // already passed the SHA-256 check.
+  if (SD.exists(finalName)) SD.remove(finalName);
+  if (!SD.rename(tempName,finalName)) {
+    status("SD UPDATE RENAME FAILED");
+    return false;
+  }
+  Serial.printf("[OTA] Verified SD BIN saved: %s (%u bytes)\\n",
+                finalName,(unsigned)latestSize);
+  status("SAVED TO SD - SELECT BIN IN LAUNCHER");
+  paint(state,100);
+  return true;
+}
 inline void progress(int done,int total) {
   static int prev=-1;
   if (total<=0) return;
@@ -173,6 +299,13 @@ inline bool install() {
   if (!available || busy) return false;
   busy=true;
   if (!connect()) { busy=false; return false; }
+  if (!compatible()) {
+    bool saved = saveUpdateOnSd();
+    available = false;
+    disconnect();
+    busy=false;
+    return saved;
+  }
   const esp_partition_t* original=esp_ota_get_running_partition();
   const esp_partition_t* target=esp_ota_get_next_update_partition(nullptr);
   if (!target || !original || latestSize>target->size) {
